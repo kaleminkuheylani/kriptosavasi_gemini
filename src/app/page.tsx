@@ -112,6 +112,7 @@ interface ChatMessage {
   toolsUsed?: string[];
   pendingActions?: PendingAction[];
   suggestedQuestions?: string[];
+  toolResults?: Record<string, unknown>;
   timestamp: Date;
 }
 
@@ -428,12 +429,13 @@ export default function Home() {
           ? data.messages
           : [data.response];
 
-        // First message carries toolsUsed badges + pendingActions
+        // First message carries toolsUsed badges + pendingActions + toolResults
         setChatMessages(prev => [...prev, {
           role: 'assistant',
           content: threadMessages[0],
           toolsUsed: data.toolsUsed,
           pendingActions: data.pendingActions,
+          toolResults: data.toolResults,
           timestamp: new Date(),
         }]);
         setLastToolsUsed(data.toolsUsed || []);
@@ -1616,6 +1618,112 @@ export default function Home() {
                       : 'bg-slate-800 text-slate-200'
                   }`}>
                     <p className="whitespace-pre-wrap text-sm">{msg.content}</p>
+                    {msg.toolResults && Object.entries(msg.toolResults).map(([toolKey, rawResult]) => {
+                      const r = rawResult as { success?: boolean; data?: unknown; historical?: unknown; error?: string; _meta?: unknown };
+                      if (!r?.success || !r.data) return null;
+
+                      // Stock price card
+                      if (toolKey === 'get_stock_price') {
+                        const enhanced = rawResult as {
+                          success: boolean; priceSource?: string;
+                          data?: { symbol?: string; name?: string; price?: number; changePercent?: number; change?: number; high?: number; low?: number; volume?: number };
+                          historical?: { trend?: string; monthChangePercent?: number; sma20?: number; sma50?: number; high1M?: number; low1M?: number } | null;
+                        };
+                        const d = enhanced.data;
+                        if (!d?.price) return null;
+                        const isPos = (d.changePercent ?? 0) >= 0;
+                        return (
+                          <div key={toolKey} className="mt-2 bg-slate-700/50 rounded-lg p-3 text-xs space-y-1.5">
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-white text-sm">{d.symbol} <span className="text-slate-400 font-normal">{d.name}</span></span>
+                              <span className={`font-bold text-base ${isPos ? 'text-emerald-400' : 'text-red-400'}`}>{d.price?.toFixed(2)} ₺</span>
+                            </div>
+                            <div className="flex gap-3 text-slate-400">
+                              <span className={isPos ? 'text-emerald-400' : 'text-red-400'}>{isPos ? '+' : ''}{d.changePercent?.toFixed(2)}%</span>
+                              <span>Y: {d.high?.toFixed(2)}</span>
+                              <span>D: {d.low?.toFixed(2)}</span>
+                              {d.volume && <span>Hacim: {(d.volume / 1000).toFixed(0)}K</span>}
+                            </div>
+                            {enhanced.historical && (
+                              <div className="flex gap-3 text-slate-500 border-t border-slate-600 pt-1.5">
+                                <span>Trend: <span className={enhanced.historical.trend === 'BULLISH' ? 'text-emerald-400' : enhanced.historical.trend === 'BEARISH' ? 'text-red-400' : 'text-slate-400'}>{enhanced.historical.trend}</span></span>
+                                <span>1A: {enhanced.historical.monthChangePercent != null ? `${enhanced.historical.monthChangePercent > 0 ? '+' : ''}${enhanced.historical.monthChangePercent}%` : '-'}</span>
+                                {enhanced.historical.sma20 && <span>SMA20: {enhanced.historical.sma20}</span>}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      }
+
+                      // Stock history card
+                      if (toolKey === 'get_stock_history') {
+                        const hist = rawResult as { success: boolean; data?: Array<{date: string; close: number}>; count?: number; trend?: string; indicators?: {sma20?: number | null; sma50?: number | null} };
+                        if (!hist.data || hist.data.length === 0) return null;
+                        const closes = hist.data.map(d => d.close);
+                        const first = closes[0], last = closes[closes.length - 1];
+                        const pct = first ? ((last - first) / first * 100).toFixed(2) : null;
+                        return (
+                          <div key={toolKey} className="mt-2 bg-slate-700/50 rounded-lg p-3 text-xs space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-300 font-medium">📈 Geçmiş Veri ({hist.count} gün)</span>
+                              <span className={`font-bold ${pct && parseFloat(pct) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{pct ? `${parseFloat(pct) >= 0 ? '+' : ''}${pct}%` : '-'}</span>
+                            </div>
+                            <div className="flex gap-3 text-slate-400">
+                              <span>Trend: <span className={hist.trend === 'BULLISH' ? 'text-emerald-400' : hist.trend === 'BEARISH' ? 'text-red-400' : 'text-slate-400'}>{hist.trend}</span></span>
+                              {hist.indicators?.sma20 && <span>SMA20: {hist.indicators.sma20.toFixed(2)}</span>}
+                              {hist.indicators?.sma50 && <span>SMA50: {hist.indicators.sma50.toFixed(2)}</span>}
+                            </div>
+                            <div className="flex gap-2 text-slate-500">
+                              <span>İlk: {first?.toFixed(2)} ₺</span>
+                              <span>Son: {last?.toFixed(2)} ₺</span>
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      // Web search results
+                      if (toolKey === 'web_search') {
+                        const ws = rawResult as { success: boolean; data?: { queries?: string[]; items?: Array<{title: string; snippet: string; url?: string}>; summary?: string } };
+                        const items = ws.data?.items?.slice(0, 4);
+                        if (!items || items.length === 0) return null;
+                        return (
+                          <div key={toolKey} className="mt-2 bg-slate-700/50 rounded-lg p-3 text-xs space-y-2">
+                            <span className="text-slate-400 font-medium">🔍 Web Araması ({items.length} sonuç)</span>
+                            <div className="space-y-1.5">
+                              {items.map((item, i) => (
+                                <div key={i} className="border-l-2 border-slate-600 pl-2">
+                                  <p className="text-slate-300 font-medium leading-tight">{item.title}</p>
+                                  {item.snippet && <p className="text-slate-500 mt-0.5 line-clamp-2">{item.snippet}</p>}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      // Top gainers/losers
+                      if (toolKey === 'get_top_gainers' || toolKey === 'get_top_losers') {
+                        const stocks = r.data as Array<{code?: string; name?: string; price?: number; changePercent?: number}>;
+                        if (!stocks || stocks.length === 0) return null;
+                        const isGainers = toolKey === 'get_top_gainers';
+                        return (
+                          <div key={toolKey} className="mt-2 bg-slate-700/50 rounded-lg p-3 text-xs">
+                            <span className="text-slate-400 font-medium mb-2 block">{isGainers ? '📈 En Çok Yükselenler' : '📉 En Çok Düşenler'}</span>
+                            <div className="space-y-1">
+                              {stocks.slice(0, 6).map((s, i) => (
+                                <div key={i} className="flex items-center justify-between">
+                                  <span className="text-slate-300 font-medium">{s.code}</span>
+                                  <span className="text-slate-500 truncate mx-2 flex-1">{s.name}</span>
+                                  <span className={isGainers ? 'text-emerald-400' : 'text-red-400'}>{s.changePercent != null ? `${s.changePercent > 0 ? '+' : ''}${s.changePercent.toFixed(2)}%` : '-'}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      return null;
+                    })}
                     {msg.toolsUsed && msg.toolsUsed.length > 0 && (
                       <div className="flex flex-wrap gap-1 mt-2 pt-2 border-t border-slate-700">
                         {msg.toolsUsed.map((toolId) => {
