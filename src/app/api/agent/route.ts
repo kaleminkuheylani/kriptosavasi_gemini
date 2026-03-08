@@ -14,7 +14,7 @@ async function getCurrentUserId() {
 // Tool Definitions
 const TOOLS = {
   get_stock_price: {
-    description: 'Hisse senedinin güncel fiyatını ve temel bilgilerini getirir',
+    description: 'Hisse senedinin güncel fiyatını getirir. API başarısız olursa web aramasına döner. 1 aylık geçmiş özeti (trend, SMA, % değişim) ve kullanıcının takip listesi/alert durumunu da döndürür.',
     parameters: { symbol: 'string - Hisse kodu (örn: ASELS, THYAO)' },
   },
   get_stock_history: {
@@ -172,6 +172,118 @@ async function getStockHistory(symbol: string, period: string = '1M') {
   }
 }
 
+// Web search fallback for stock price when API is unavailable
+async function webSearchForPrice(symbol: string) {
+  try {
+    const zai = await ZAI.create();
+    const query = `${symbol} hisse fiyat bugün BIST borsa TL`;
+    const results = await zai.functions.invoke('web_search', { query, num: 3 });
+    const items = extractSearchContent(results);
+    return {
+      success: true,
+      note: 'Asenax API erişilemedi — web aramasından elde edildi',
+      searchResults: items.slice(0, 3),
+    };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+// Enhanced stock price: API + web fallback + 1M history summary + user status
+async function getStockPriceEnhanced(symbol: string, userId: string | null) {
+  const sym = symbol.toUpperCase();
+
+  // Step 1: API price (with cache)
+  const apiResult = await getStockPrice(sym) as {
+    success: boolean;
+    data?: Record<string, unknown>;
+    error?: string;
+  };
+
+  let priceData: Record<string, unknown> | null = null;
+  let priceSource = 'api';
+
+  if (apiResult.success && apiResult.data) {
+    priceData = apiResult.data;
+  } else {
+    // Step 2: Fallback to web search
+    priceSource = 'web_search_fallback';
+    const webResult = await webSearchForPrice(sym) as {
+      success: boolean;
+      note?: string;
+      searchResults?: unknown[];
+      error?: string;
+    };
+    if (webResult.success) {
+      priceData = {
+        symbol: sym,
+        note: webResult.note,
+        searchResults: webResult.searchResults,
+      };
+    }
+  }
+
+  // Step 3: 1-month historical summary (parallel with step 4)
+  const [histResult, watchlistItem, activeAlerts] = await Promise.all([
+    getStockHistory(sym, '1M') as Promise<{
+      success: boolean;
+      data?: Array<{ date: string; close: number; high: number; low: number; volume: number }>;
+      indicators?: { sma20: number | null; sma50: number | null };
+      trend?: string;
+    }>,
+    userId
+      ? prisma.watchlistItem.findFirst({ where: { symbol: sym, userId } })
+      : Promise.resolve(null),
+    userId
+      ? prisma.priceAlert.findMany({ where: { symbol: sym, userId, active: true } })
+      : Promise.resolve([]),
+  ]);
+
+  let historicalSummary: Record<string, unknown> | null = null;
+  if (histResult.success && histResult.data && histResult.data.length > 0) {
+    const closes = histResult.data.map(d => d.close);
+    const highs = histResult.data.map(d => d.high);
+    const lows = histResult.data.map(d => d.low);
+    const first = closes[0];
+    const last = closes[closes.length - 1];
+    historicalSummary = {
+      period: '1M',
+      dataPoints: histResult.data.length,
+      firstClose: first,
+      lastClose: last,
+      monthChangePercent: first ? +((last - first) / first * 100).toFixed(2) : null,
+      high1M: Math.max(...highs),
+      low1M: Math.min(...lows),
+      sma20: histResult.indicators?.sma20 ? +histResult.indicators.sma20.toFixed(2) : null,
+      sma50: histResult.indicators?.sma50 ? +histResult.indicators.sma50.toFixed(2) : null,
+      trend: histResult.trend || 'NEUTRAL',
+    };
+  }
+
+  // Step 4: User status for this symbol
+  const userStatus = userId
+    ? {
+        isInWatchlist: !!watchlistItem,
+        addedAt: watchlistItem?.createdAt ?? null,
+        targetPrice: watchlistItem?.targetPrice ?? null,
+        activeAlerts: activeAlerts.map(a => ({
+          targetPrice: a.targetPrice,
+          condition: a.condition,
+          triggered: a.triggered,
+        })),
+        alertCount: activeAlerts.length,
+      }
+    : { isInWatchlist: false, note: 'Giriş yapılmamış' };
+
+  return {
+    success: !!priceData,
+    priceSource,
+    data: priceData,
+    historical: historicalSummary,
+    userStatus,
+  };
+}
+
 async function getWatchlist(userId: string | null) {
   try {
     const items = await prisma.watchlistItem.findMany({ 
@@ -216,6 +328,178 @@ async function webSearch(query: string) {
     const zai = await ZAI.create();
     const results = await zai.functions.invoke('web_search', { query, num: 5 });
     return { success: true, data: results };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+// Step 1: LLM generates better search queries
+async function generateSearchQueries(userMessage: string): Promise<string[]> {
+  try {
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.GROQ_API_KEY || 'gsk_demo'}`,
+      },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [
+          {
+            role: 'system',
+            content: `Sen bir arama uzmanısın. Kullanıcının sorusunu daha iyi web aramaları için optimize et.
+BIST, hisse, finans ve Türk piyasası konularında uzmanlaşmışsın.
+JSON formatında sadece 2-3 arama sorgusu döndür. Başka açıklama yapma.
+Örnek: {"queries": ["THYAO hisse analiz 2024", "Türk Hava Yolları KAP bildirimi", "THYAO teknik analiz"]}`
+          },
+          {
+            role: 'user',
+            content: `Şu soru için en iyi 2-3 arama sorgusunu üret: "${userMessage}"`
+          }
+        ],
+        temperature: 0.3,
+        max_tokens: 200,
+      }),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      const content = data.choices?.[0]?.message?.content || '';
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (Array.isArray(parsed.queries) && parsed.queries.length > 0) {
+          return parsed.queries.slice(0, 3);
+        }
+      }
+    }
+  } catch (_e) {
+    // Fallback to original message
+  }
+  return [userMessage];
+}
+
+// Step 2: Extract title + paragraphs from raw search results
+function extractSearchContent(rawResults: unknown): Array<{ title: string; snippet: string; url?: string }> {
+  if (!rawResults) return [];
+  const items: Array<{ title: string; snippet: string; url?: string }> = [];
+
+  const tryExtract = (obj: unknown) => {
+    if (!obj || typeof obj !== 'object') return;
+    const o = obj as Record<string, unknown>;
+
+    if (typeof o.title === 'string' || typeof o.snippet === 'string' || typeof o.description === 'string') {
+      items.push({
+        title: (o.title || o.name || '') as string,
+        snippet: (o.snippet || o.description || o.content || o.body || '') as string,
+        url: (o.url || o.link || o.href || '') as string,
+      });
+      return;
+    }
+
+    for (const val of Object.values(o)) {
+      if (Array.isArray(val)) {
+        for (const item of val) tryExtract(item);
+      } else if (val && typeof val === 'object') {
+        tryExtract(val);
+      }
+    }
+  };
+
+  tryExtract(rawResults);
+  return items.filter(i => i.title || i.snippet).slice(0, 10);
+}
+
+// Step 3: Summarize extracted content with Groq
+async function summarizeSearchResults(
+  items: Array<{ title: string; snippet: string; url?: string }>,
+  userMessage: string
+): Promise<string> {
+  if (items.length === 0) return 'Arama sonucu bulunamadı.';
+
+  const itemsText = items
+    .map((item, i) => `[${i + 1}] Başlık: ${item.title}\nİçerik: ${item.snippet}${item.url ? `\nKaynak: ${item.url}` : ''}`)
+    .join('\n\n');
+
+  try {
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.GROQ_API_KEY || 'gsk_demo'}`,
+      },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [
+          {
+            role: 'system',
+            content: `Sen bir haber ve finans analiz asistanısın. Verilen arama sonuçlarını kullanıcının sorusuyla ilişkilendirerek özetle.
+Sadece başlık ve paragraf bilgilerini kullan. Kaynaklara atıfta bulun. Türkçe yanıt ver.`
+          },
+          {
+            role: 'user',
+            content: `Kullanıcı sorusu: "${userMessage}"\n\nArama sonuçları:\n${itemsText}\n\nBu sonuçları kullanıcı sorusuyla ilgili şekilde özetle.`
+          }
+        ],
+        temperature: 0.5,
+        max_tokens: 1000,
+      }),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      return data.choices?.[0]?.message?.content || itemsText;
+    }
+  } catch (_e) {
+    // Fallback to raw items
+  }
+
+  return items.map(i => `• **${i.title}**: ${i.snippet}`).join('\n');
+}
+
+// Enhanced web search: query generation → parallel search → extract → summarize
+async function enhancedWebSearch(userMessage: string) {
+  try {
+    console.log('🔍 [enhancedWebSearch] Sorgular üretiliyor...');
+    const queries = await generateSearchQueries(userMessage);
+    console.log('🔍 [enhancedWebSearch] Üretilen sorgular:', queries);
+
+    const zai = await ZAI.create();
+
+    // Parallel search for all queries
+    const searchPromises = queries.map(q =>
+      zai.functions.invoke('web_search', { query: q, num: 5 }).catch(() => null)
+    );
+    const rawResults = await Promise.all(searchPromises);
+
+    // Extract title + paragraphs from all results
+    const allItems: Array<{ title: string; snippet: string; url?: string }> = [];
+    for (const raw of rawResults) {
+      if (raw) allItems.push(...extractSearchContent(raw));
+    }
+
+    // Deduplicate by title
+    const seen = new Set<string>();
+    const uniqueItems = allItems.filter(item => {
+      const key = item.title.slice(0, 60);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    console.log(`🔍 [enhancedWebSearch] ${uniqueItems.length} sonuç bulundu, özetleniyor...`);
+
+    // Summarize
+    const summary = await summarizeSearchResults(uniqueItems, userMessage);
+
+    return {
+      success: true,
+      data: {
+        queries,
+        items: uniqueItems,
+        summary,
+      },
+    };
   } catch (error) {
     return { success: false, error: String(error) };
   }
@@ -484,7 +768,7 @@ async function executeTool(toolName: string, params: Record<string, unknown>, us
   
   switch (toolName) {
     case 'get_stock_price':
-      result = await getStockPrice(params.symbol as string);
+      result = await getStockPriceEnhanced(params.symbol as string, userId);
       break;
     case 'get_stock_history':
       result = await getStockHistory(params.symbol as string, params.period as string);
@@ -499,7 +783,7 @@ async function executeTool(toolName: string, params: Record<string, unknown>, us
       result = await removeFromWatchlist(params.symbol as string, userId);
       break;
     case 'web_search':
-      result = await webSearch(params.query as string);
+      result = await enhancedWebSearch(params.query as string);
       break;
     case 'read_document':
       result = await readDocument(params.url as string);
@@ -727,6 +1011,64 @@ function selectToolsForQuery(message: string): { tools: string[]; params: Record
   return { tools: [...new Set(tools)], params };
 }
 
+// Builds a compact text representation of tool results for the final LLM
+// For web_search, uses the pre-generated summary instead of raw items to save tokens
+function buildToolResultsText(toolResults: Record<string, unknown>): string {
+  const parts: string[] = [];
+
+  for (const [tool, result] of Object.entries(toolResults)) {
+    const r = result as { success: boolean; data?: unknown; error?: string; _meta?: unknown };
+    if (!r.success) {
+      parts.push(`### ${tool}\nHata: ${r.error}`);
+      continue;
+    }
+
+    if (tool === 'web_search') {
+      const d = r.data as { queries?: string[]; summary?: string; items?: unknown[] } | null;
+      if (d) {
+        const queriesText = d.queries ? `Kullanılan Sorgular: ${d.queries.join(' | ')}` : '';
+        const summaryText = d.summary || '';
+        parts.push(`### web_search\n${queriesText}\n\n${summaryText}`);
+      }
+    } else if (tool === 'get_stock_price') {
+      const enhanced = result as {
+        success: boolean;
+        priceSource?: string;
+        data?: unknown;
+        historical?: Record<string, unknown> | null;
+        userStatus?: Record<string, unknown> | null;
+      };
+      const lines: string[] = [`### get_stock_price (kaynak: ${enhanced.priceSource || 'api'})`];
+      if (enhanced.data) {
+        lines.push('**Fiyat Verisi:**\n' + JSON.stringify(enhanced.data, null, 2).slice(0, 600));
+      }
+      if (enhanced.historical) {
+        const h = enhanced.historical;
+        lines.push(
+          `**1 Aylık Özet:** ${h.monthChangePercent}% değişim | Trend: ${h.trend} | ` +
+          `SMA20: ${h.sma20} | SMA50: ${h.sma50} | 1M Yüksek: ${h.high1M} | 1M Düşük: ${h.low1M}`
+        );
+      }
+      if (enhanced.userStatus) {
+        const u = enhanced.userStatus as { isInWatchlist?: boolean; addedAt?: unknown; targetPrice?: unknown; alertCount?: number; note?: string };
+        if (u.isInWatchlist) {
+          lines.push(
+            `**Kullanıcı Durumu:** Takip listesinde ✓ | ` +
+            `Eklenme: ${u.addedAt} | Hedef fiyat: ${u.targetPrice ?? 'yok'} | Aktif alert: ${u.alertCount ?? 0}`
+          );
+        } else {
+          lines.push(`**Kullanıcı Durumu:** Takip listesinde değil${u.note ? ` (${u.note})` : ''}`);
+        }
+      }
+      parts.push(lines.join('\n'));
+    } else {
+      parts.push(`### ${tool}\n${JSON.stringify(r.data, null, 2).slice(0, 1500)}`);
+    }
+  }
+
+  return parts.join('\n\n');
+}
+
 // AI Agent Handler
 export async function POST(request: NextRequest) {
   try {
@@ -828,16 +1170,16 @@ YANIT YAPISI:
             role: m.role,
             content: m.content,
           })),
-          { 
-            role: 'user', 
+          {
+            role: 'user',
             content: `Kullanıcı Sorusu: "${message}"
 
 Kullanılan Araçlar: ${tools.join(', ')}
 
 Araç Sonuçları:
-${JSON.stringify(toolResults, null, 2)}
+${buildToolResultsText(toolResults)}
 
-Bu verileri kullanarak kullanıcının sorusuna kapsamlı bir yanıt ver.` 
+Bu verileri kullanarak kullanıcının sorusuna kapsamlı bir yanıt ver.`
           },
         ],
         temperature: 0.7,
