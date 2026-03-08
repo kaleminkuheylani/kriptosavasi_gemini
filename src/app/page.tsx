@@ -423,14 +423,30 @@ export default function Home() {
       const data = await response.json();
       
       if (data.success) {
+        const threadMessages: string[] = data.messages && data.messages.length > 0
+          ? data.messages
+          : [data.response];
+
+        // First message carries toolsUsed badges + pendingActions
         setChatMessages(prev => [...prev, {
           role: 'assistant',
-          content: data.response,
+          content: threadMessages[0],
           toolsUsed: data.toolsUsed,
           pendingActions: data.pendingActions,
           timestamp: new Date(),
         }]);
         setLastToolsUsed(data.toolsUsed || []);
+
+        // Remaining thread messages arrive with 600ms stagger
+        threadMessages.slice(1).forEach((msg: string, idx: number) => {
+          setTimeout(() => {
+            setChatMessages(prev => [...prev, {
+              role: 'assistant',
+              content: msg,
+              timestamp: new Date(),
+            }]);
+          }, (idx + 1) * 600);
+        });
 
         if (data.toolsUsed?.some((t: string) => t.includes('watchlist') || t.includes('alert'))) {
           fetchWatchlist();

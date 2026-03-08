@@ -850,52 +850,122 @@ async function executeTool(toolName: string, params: Record<string, unknown>, us
 }
 
 // Intelligent Tool Selector - Determines which tools to use based on user query
-function selectToolsForQuery(message: string): { tools: string[]; params: Record<string, Record<string, unknown>> } {
+function selectToolsForQuery(message: string): {
+  tools: string[];
+  params: Record<string, Record<string, unknown>>;
+  queryType: string;
+  queryMeta: Record<string, unknown>;
+} {
   const lowerMessage = message.toLowerCase();
   const tools: string[] = [];
   const params: Record<string, Record<string, unknown>> = {};
-  
-  // Extract stock symbols - more flexible matching
-  // Try uppercase first
-  let symbolMatches = message.match(/\b([A-Z]{3,5})\b/g) || [];
-  
-  // Also try to extract from mixed case (like "ASELSten", "ASELS'ten")
+
+  // Extract stock symbols
+  const symbolMatches = message.match(/\b([A-Z]{3,5})\b/g) || [];
   const upperMessage = message.toUpperCase();
   const additionalMatches = upperMessage.match(/([A-Z]{3,5})/g) || [];
-  
-  // Combine and dedupe
   const allMatches = [...symbolMatches, ...additionalMatches];
-  const symbols = [...new Set(allMatches.map(s => s.toUpperCase()))].filter(s => 
+  const symbols = [...new Set(allMatches.map(s => s.toUpperCase()))].filter(s =>
     s.length >= 3 && s.length <= 5 && /^[A-Z]+$/.test(s)
   );
-  
+
   console.log('🔍 Extracted symbols:', symbols);
-  
-  // === PORTFOLIO/INVESTMENT QUESTIONS ===
-  if (lowerMessage.includes('lot') || lowerMessage.includes('portföy') || lowerMessage.includes('portfoy') || 
-      lowerMessage.includes('ne yapmalı') || lowerMessage.includes('ne yapmali') || lowerMessage.includes('satsam mı') || 
-      lowerMessage.includes('alsam mı') || lowerMessage.includes('tutmalı') || lowerMessage.includes('satmalı')) {
-    
-    if (symbols.length > 0) {
-      for (const symbol of symbols) {
-        tools.push('get_stock_price');
-        params[`get_stock_price_${symbol}`] = { symbol };
-        tools.push('get_stock_history');
-        params[`get_stock_history_${symbol}`] = { symbol, period: '3M' };
-        tools.push('get_kap_data');
-        params[`get_kap_data_${symbol}`] = { symbol };
-        tools.push('web_search');
-        params[`web_search_${symbol}`] = { query: `${symbol} hisse analiz haber yorum` };
-      }
+
+  // Extract budget amount (e.g. "50000 lira", "10k TL", "50 bin")
+  const budgetMatch = message.match(/(\d[\d.,]*)\s*(bin\s*)?(lira|tl|₺)/i);
+  const budgetAmount = budgetMatch
+    ? parseFloat(budgetMatch[1].replace(/\./g, '').replace(',', '.')) *
+      (budgetMatch[2] ? 1000 : 1)
+    : null;
+
+  // Extract time period for predictions (e.g. "30 gün", "2 hafta", "3 ay")
+  const periodMatch = message.match(/(\d+)\s*(gün|hafta|ay)/i);
+  const periodDays = periodMatch
+    ? parseInt(periodMatch[1]) *
+      (periodMatch[2].startsWith('hafta') ? 7 : periodMatch[2].startsWith('ay') ? 30 : 1)
+    : null;
+
+  // ── Query type detection (priority order) ───────────────────────────────
+
+  // 1. PRICE PREDICTION: "X gün sonra", "tahmin", "ne olur", "kaç olur"
+  const isPricePrediction = /tahmin|tahmini\s*fiyat|\bgün sonra\b|hafta sonra|ay sonra|kaç olur|ne olur|fiyat.*ne|öngörü/i.test(message);
+
+  // 2. SELL DECISION: "satmalı mıyım", "satsam mı", "satayım mı"
+  const isSellDecision = /satmal[ıi]\s*m[ıi]y[ıi]m|satmal[ıi]\s*m[ıi]|satsam\s*m[ıi]|satay[ıi]m\s*m[ıi]|sat\s*m[ıi]y[ıi]m|elden\s*ç[ıi]karsam|sat[a-z]*\s*m[ıi]/i.test(message);
+
+  // 3. BUDGET ADVICE: "X lira param var", "X TL yatırım", no specific stock action
+  const isBudgetAdvice = budgetAmount !== null &&
+    /param\s*var|yatıracağım|yatırsam|ne\s*(yapmalı|yapmali|almalı|almali)|yatırım\s*(yapmalı|tavsiye|öneri)/i.test(message);
+
+  // ── Tool selection per query type ────────────────────────────────────────
+
+  if (isPricePrediction && symbols.length > 0) {
+    for (const symbol of symbols) {
+      tools.push('get_stock_price');
+      params[`get_stock_price_${symbol}`] = { symbol };
+      tools.push('get_stock_history');
+      params[`get_stock_history_${symbol}`] = { symbol, period: '1Y' };
+      tools.push('get_kap_data');
+      params[`get_kap_data_${symbol}`] = { symbol };
+      tools.push('web_search');
+      params[`web_search_pred_${symbol}`] = {
+        query: `${symbol} hisse hedef fiyat analist tahmin 2025`,
+      };
     }
+    return { tools: [...new Set(tools)], params, queryType: 'price_prediction', queryMeta: { symbols, periodDays } };
   }
-  
+
+  if (isSellDecision && symbols.length > 0) {
+    for (const symbol of symbols) {
+      tools.push('get_stock_price');
+      params[`get_stock_price_${symbol}`] = { symbol };
+      tools.push('get_stock_history');
+      params[`get_stock_history_${symbol}`] = { symbol, period: '6M' };
+      tools.push('get_kap_data');
+      params[`get_kap_data_${symbol}`] = { symbol };
+      tools.push('web_search');
+      params[`web_search_sell_${symbol}`] = {
+        query: `${symbol} hisse sat analiz hedef fiyat 2025`,
+      };
+    }
+    return { tools: [...new Set(tools)], params, queryType: 'sell_decision', queryMeta: { symbols } };
+  }
+
+  if (isBudgetAdvice) {
+    tools.push('scan_market');
+    params['scan_market'] = {};
+    tools.push('get_top_gainers');
+    params['get_top_gainers'] = { limit: 10 };
+    tools.push('get_top_losers');
+    params['get_top_losers'] = { limit: 10 };
+    tools.push('web_search');
+    params['web_search_budget'] = {
+      query: `BIST yatırım fırsatları portföy önerisi ${budgetAmount ? budgetAmount + ' TL' : ''}`,
+    };
+    return { tools: [...new Set(tools)], params, queryType: 'budget_advice', queryMeta: { budgetAmount } };
+  }
+
+  // === PORTFOLIO/HOLD QUESTIONS (with specific stock) ===
+  if ((lowerMessage.includes('ne yapmalı') || lowerMessage.includes('ne yapmali') ||
+       lowerMessage.includes('tutmalı') || lowerMessage.includes('alsam mı') ||
+       lowerMessage.includes('portföy') || lowerMessage.includes('lot')) && symbols.length > 0) {
+    for (const symbol of symbols) {
+      tools.push('get_stock_price');
+      params[`get_stock_price_${symbol}`] = { symbol };
+      tools.push('get_stock_history');
+      params[`get_stock_history_${symbol}`] = { symbol, period: '3M' };
+      tools.push('get_kap_data');
+      params[`get_kap_data_${symbol}`] = { symbol };
+      tools.push('web_search');
+      params[`web_search_${symbol}`] = { query: `${symbol} hisse analiz haber yorum` };
+    }
+    return { tools: [...new Set(tools)], params, queryType: 'portfolio_question', queryMeta: { symbols } };
+  }
+
   // === WHERE TO INVEST TODAY ===
-  else if (lowerMessage.includes('nereden') || lowerMessage.includes('nereye') || 
-           lowerMessage.includes('yatırım') || lowerMessage.includes('yativim') ||
-           lowerMessage.includes('öneri') || lowerMessage.includes('oneri') ||
-           lowerMessage.includes('hangi hisse') || lowerMessage.includes('bugün')) {
-    
+  if (lowerMessage.includes('nereye') || lowerMessage.includes('yatırım') ||
+      lowerMessage.includes('öneri') || lowerMessage.includes('hangi hisse') ||
+      lowerMessage.includes('bugün ne')) {
     tools.push('scan_market');
     params['scan_market'] = {};
     tools.push('get_top_gainers');
@@ -906,12 +976,11 @@ function selectToolsForQuery(message: string): { tools: string[]; params: Record
     params['get_kap_data'] = {};
     tools.push('web_search');
     params['web_search_market'] = { query: 'BIST borsa piyasa analiz bugün öneri' };
+    return { tools: [...new Set(tools)], params, queryType: 'market_overview', queryMeta: {} };
   }
-  
+
   // === ANALYSIS REQUESTS ===
-  else if (lowerMessage.includes('analiz') || lowerMessage.includes('analiz et') || 
-           lowerMessage.includes('incel') || lowerMessage.includes('detay')) {
-    
+  if (lowerMessage.includes('analiz') || lowerMessage.includes('incel') || lowerMessage.includes('detay')) {
     if (symbols.length > 0) {
       for (const symbol of symbols) {
         tools.push('get_stock_price');
@@ -925,112 +994,107 @@ function selectToolsForQuery(message: string): { tools: string[]; params: Record
       tools.push('scan_market');
       params['scan_market'] = {};
     }
+    return { tools: [...new Set(tools)], params, queryType: 'analysis', queryMeta: { symbols } };
   }
-  
+
   // === WATCHLIST OPERATIONS ===
-  else if (lowerMessage.includes('takip') || lowerMessage.includes('listem') || lowerMessage.includes('watchlist')) {
-    if (lowerMessage.includes('ekle') || lowerMessage.includes('ala') || lowerMessage.includes('kaydet')) {
-      if (symbols.length > 0) {
-        for (const symbol of symbols) {
-          tools.push('get_stock_price');
-          params[`get_stock_price_${symbol}`] = { symbol };
-          tools.push('add_to_watchlist');
-          params[`add_to_watchlist_${symbol}`] = { symbol, name: '' };
-        }
+  if (lowerMessage.includes('takip') || lowerMessage.includes('listem') || lowerMessage.includes('watchlist')) {
+    if (lowerMessage.includes('ekle') || lowerMessage.includes('kaydet')) {
+      for (const symbol of symbols) {
+        tools.push('get_stock_price');
+        params[`get_stock_price_${symbol}`] = { symbol };
+        tools.push('add_to_watchlist');
+        params[`add_to_watchlist_${symbol}`] = { symbol, name: '' };
       }
     } else if (lowerMessage.includes('kaldır') || lowerMessage.includes('sil') || lowerMessage.includes('çıkar')) {
-      if (symbols.length > 0) {
-        for (const symbol of symbols) {
-          tools.push('remove_from_watchlist');
-          params[`remove_from_watchlist_${symbol}`] = { symbol };
-        }
+      for (const symbol of symbols) {
+        tools.push('remove_from_watchlist');
+        params[`remove_from_watchlist_${symbol}`] = { symbol };
       }
     } else {
       tools.push('get_watchlist');
       params['get_watchlist'] = {};
     }
+    return { tools: [...new Set(tools)], params, queryType: 'watchlist', queryMeta: { symbols } };
   }
-  
+
   // === ALERTS ===
-  else if (lowerMessage.includes('bildirim') || lowerMessage.includes('alarm') || lowerMessage.includes('uyarı')) {
+  if (lowerMessage.includes('bildirim') || lowerMessage.includes('alarm') || lowerMessage.includes('uyarı')) {
     if (lowerMessage.includes('oluştur') || lowerMessage.includes('kur') || lowerMessage.includes('ayarla')) {
-      if (symbols.length > 0) {
-        const priceMatch = message.match(/(\d+[.,]?\d*)/);
-        const targetPrice = priceMatch ? parseFloat(priceMatch[1].replace(',', '.')) : null;
-        const condition = lowerMessage.includes('üzer') || lowerMessage.includes('yukarı') ? 'above' : 'below';
-        
-        if (targetPrice) {
-          for (const symbol of symbols) {
-            tools.push('create_price_alert');
-            params[`create_price_alert_${symbol}`] = { symbol, targetPrice, condition };
-          }
+      const priceMatch = message.match(/(\d+[.,]?\d*)/);
+      const targetPrice = priceMatch ? parseFloat(priceMatch[1].replace(',', '.')) : null;
+      const condition = lowerMessage.includes('üzer') || lowerMessage.includes('yukarı') ? 'above' : 'below';
+      if (targetPrice) {
+        for (const symbol of symbols) {
+          tools.push('create_price_alert');
+          params[`create_price_alert_${symbol}`] = { symbol, targetPrice, condition };
         }
       }
     } else {
       tools.push('get_price_alerts');
       params['get_price_alerts'] = {};
     }
+    return { tools: [...new Set(tools)], params, queryType: 'alert', queryMeta: { symbols } };
   }
-  
-  // === GAINERS/LOSERS ===
-  else if (lowerMessage.includes('yükselen') || lowerMessage.includes('yukselen') || 
-           lowerMessage.includes('kazandıran') || lowerMessage.includes('kazandiran') ||
-           lowerMessage.includes('en çok')) {
+
+  // === GAINERS / LOSERS ===
+  if (lowerMessage.includes('yükselen') || lowerMessage.includes('kazandıran') || lowerMessage.includes('en çok')) {
     tools.push('get_top_gainers');
     params['get_top_gainers'] = { limit: 15 };
     tools.push('scan_market');
     params['scan_market'] = {};
+    return { tools: [...new Set(tools)], params, queryType: 'gainers', queryMeta: {} };
   }
-  else if (lowerMessage.includes('düşen') || lowerMessage.includes('dusen') || 
-           lowerMessage.includes('kaybettiren') || lowerMessage.includes('kaybeden')) {
+  if (lowerMessage.includes('düşen') || lowerMessage.includes('kaybettiren') || lowerMessage.includes('kaybeden')) {
     tools.push('get_top_losers');
     params['get_top_losers'] = { limit: 15 };
     tools.push('scan_market');
     params['scan_market'] = {};
+    return { tools: [...new Set(tools)], params, queryType: 'losers', queryMeta: {} };
   }
-  
-  // === KAP DATA ===
-  else if (lowerMessage.includes('kap') || lowerMessage.includes('bildirim') || lowerMessage.includes('açıklama')) {
+
+  // === KAP ===
+  if (lowerMessage.includes('kap') || lowerMessage.includes('açıklama')) {
     tools.push('get_kap_data');
     params['get_kap_data'] = symbols.length > 0 ? { symbol: symbols[0] } : {};
+    return { tools: [...new Set(tools)], params, queryType: 'kap', queryMeta: { symbols } };
   }
-  
+
   // === MARKET SCAN ===
-  else if (lowerMessage.includes('piyasa') || lowerMessage.includes('tara') || lowerMessage.includes('sektör') ||
-           lowerMessage.includes('bist') || lowerMessage.includes('borsa')) {
+  if (lowerMessage.includes('piyasa') || lowerMessage.includes('bist') || lowerMessage.includes('borsa') || lowerMessage.includes('sektör')) {
     tools.push('scan_market');
     params['scan_market'] = {};
     tools.push('get_top_gainers');
     params['get_top_gainers'] = { limit: 10 };
     tools.push('get_top_losers');
     params['get_top_losers'] = { limit: 10 };
+    return { tools: [...new Set(tools)], params, queryType: 'market_scan', queryMeta: {} };
   }
-  
-  // === NEWS/SEARCH ===
-  else if (lowerMessage.includes('haber') || lowerMessage.includes('ara') || lowerMessage.includes('son')) {
+
+  // === NEWS ===
+  if (lowerMessage.includes('haber') || lowerMessage.includes('son')) {
     tools.push('web_search');
     params['web_search'] = { query: message };
     if (symbols.length > 0) {
       tools.push('get_kap_data');
       params['get_kap_data'] = { symbol: symbols[0] };
     }
+    return { tools: [...new Set(tools)], params, queryType: 'news', queryMeta: { symbols } };
   }
-  
-  // === SPECIFIC STOCK QUERY (fallback) ===
-  else if (symbols.length > 0) {
+
+  // === SPECIFIC STOCK ===
+  if (symbols.length > 0) {
     for (const symbol of symbols) {
       tools.push('get_stock_price');
       params[`get_stock_price_${symbol}`] = { symbol };
     }
+    return { tools: [...new Set(tools)], params, queryType: 'stock_price', queryMeta: { symbols } };
   }
-  
-  // === GENERAL QUERY ===
-  else {
-    tools.push('scan_market');
-    params['scan_market'] = {};
-  }
-  
-  return { tools: [...new Set(tools)], params };
+
+  // === GENERAL ===
+  tools.push('scan_market');
+  params['scan_market'] = {};
+  return { tools: [...new Set(tools)], params, queryType: 'general', queryMeta: {} };
 }
 
 // Builds a compact text representation of tool results for the final LLM
@@ -1175,7 +1239,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Intelligent tool selection
-    const { tools, params } = selectToolsForQuery(message);
+    const { tools, params, queryType, queryMeta } = selectToolsForQuery(message);
+    console.log('🎯 Query type:', queryType, '| Meta:', queryMeta);
 
     // Separate immediate tools from those requiring user confirmation
     const immediateTools = tools.filter(t => !CONFIRMATION_REQUIRED_TOOLS.includes(t));
@@ -1206,27 +1271,61 @@ export async function POST(request: NextRequest) {
       toolResults[tool] = result;
     }
 
-    // Generate AI response
-    const pendingSection = pendingActions.length > 0
-      ? `\n\nBEKLEYEN İŞLEMLER (kullanıcı onayı gerekli):\n${pendingActions.map(a => `- ${a.description}`).join('\n')}\nYanıtında bu işlemleri önerecek veya onay isteyecek şekilde belirt.`
+    // ── Build query-type-specific user prompt ────────────────────────────
+    const pendingNote = pendingActions.length > 0
+      ? `\n\nBEKLEYEN İŞLEMLER (onay soracaksın):\n${pendingActions.map(a => `- ${a.description}`).join('\n')}`
       : '';
 
+    let userPromptContent = '';
+
+    if (queryType === 'price_prediction') {
+      const { symbols: syms, periodDays: days } = queryMeta as { symbols: string[]; periodDays: number | null };
+      userPromptContent = `Kullanıcı Sorusu: "${message}"
+Hisse: ${syms.join(', ')} | Süre: ${days ? days + ' gün' : 'belirtilmedi'}
+
+Araç Sonuçları:
+${buildToolResultsText(toolResults)}
+
+THREAD FORMAT: Yanıtını "|||" ile ayırdığın 3 kısa mesaj olarak ver:
+Mesaj 1 — 📈 Mevcut durum + trend (3-4 madde, kısa)
+Mesaj 2 — 🎯 Analist hedefleri + tahmin senaryoları
+Mesaj 3 — ⚠️ Risk faktörleri + not${pendingNote}`;
+    } else if (queryType === 'sell_decision') {
+      const { symbols: syms } = queryMeta as { symbols: string[] };
+      userPromptContent = `Kullanıcı Sorusu: "${message}"
+Hisse: ${syms.join(', ')}
+
+Araç Sonuçları:
+${buildToolResultsText(toolResults)}
+
+THREAD FORMAT: Yanıtını "|||" ile ayırdığın 3 kısa mesaj olarak ver:
+Mesaj 1 — 📊 Fiyat durumu + son performans (3-4 madde)
+Mesaj 2 — 🔍 Teknik ve temel sinyaller (güçlü/zayıf noktalar)
+Mesaj 3 — 💡 Sonuç değerlendirmesi (yatırım tavsiyesi değil, sadece analiz) + not${pendingNote}`;
+    } else if (queryType === 'budget_advice') {
+      const { budgetAmount: budget } = queryMeta as { budgetAmount: number | null };
+      userPromptContent = `Kullanıcı Sorusu: "${message}"
+Bütçe: ${budget ? budget.toLocaleString('tr-TR') + ' TL' : 'belirtilmedi'}
+
+Araç Sonuçları:
+${buildToolResultsText(toolResults)}
+
+THREAD FORMAT: Yanıtını "|||" ile ayırdığın 3 kısa mesaj olarak ver:
+Mesaj 1 — 💰 Piyasa durumu + fırsat özeti (3-4 madde)
+Mesaj 2 — 📋 Sektör dağılımı önerisi${budget ? ` (${budget.toLocaleString('tr-TR')} TL için)` : ''} + öne çıkan hisseler
+Mesaj 3 — ⚠️ Risk uyarısı + not${pendingNote}`;
+    } else {
+      userPromptContent = `Kullanıcı Sorusu: "${message}"
+
+Araç Sonuçları:
+${buildToolResultsText(toolResults)}
+
+THREAD FORMAT: Yanıtını "|||" ile ayırdığın 2-3 kısa mesaj olarak ver. Her mesaj kısa ve odaklı olsun.${pendingNote}`;
+    }
+
     const systemPrompt = `Sen profesyonel bir BIST hisse analiz asistanısın. Türkçe yanıt ver.
-
-KURALLAR:
-1. Tool sonuçlarını kullanarak KAPSAMLI ve DETAYLI bir analiz yap
-2. Sayısal verileri kullan (fiyat, değişim, hacim, teknik göstergeler)
-3. Risk faktörlerini belirt
-4. Yatırım TAVSİYESİ VERME, sadece ANALİZ yap
-5. Emoji kullan ama abartma
-6. Sonuçları MADDE MADDE sun
-
-YANIT YAPISI:
-📊 **Özet**
-📈 **Teknik Analiz** (varsa)
-📰 **Haberler/KAP** (varsa)
-⚠️ **Risk Değerlendirmesi**
-💡 **Sonuç**${pendingSection}`;
+Yatırım TAVSİYESİ VERME, sadece ANALİZ yap. Emoji kullan ama abartma. Her mesaj maksimum 5 madde içersin.
+Yanıtı her zaman "|||" ayracıyla ayrılmış kısa mesajlar olarak döndür. Başka format kullanma.`;
 
     const finalResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
@@ -1242,44 +1341,32 @@ YANIT YAPISI:
             role: m.role,
             content: m.content,
           })),
-          {
-            role: 'user',
-            content: `Kullanıcı Sorusu: "${message}"
-
-Kullanılan Araçlar: ${immediateTools.join(', ')}
-
-Araç Sonuçları:
-${buildToolResultsText(toolResults)}
-
-Bu verileri kullanarak kullanıcının sorusuna kapsamlı bir yanıt ver.`
-          },
+          { role: 'user', content: userPromptContent },
         ],
         temperature: 0.7,
-        max_tokens: 2500,
+        max_tokens: 2000,
       }),
     });
 
-    let responseText = '';
+    let rawText = '';
 
     if (finalResponse.ok) {
       const finalData = await finalResponse.json();
-      responseText = finalData.choices?.[0]?.message?.content || '';
+      rawText = finalData.choices?.[0]?.message?.content || '';
     } else {
-      responseText = `## 📊 İşlem Sonuçları\n\n`;
-      responseText += `**Kullanılan Araçlar:** ${immediateTools.map(t => `🔧 ${t}`).join(', ')}\n\n`;
-
-      for (const [tool, result] of Object.entries(toolResults)) {
-        const r = result as { success: boolean; data?: unknown; error?: string };
-        if (r.success && r.data) {
-          responseText += `### ${tool}\n`;
-          responseText += '```\n' + JSON.stringify(r.data, null, 2).slice(0, 500) + '\n```\n\n';
-        }
-      }
+      rawText = `İşlem tamamlandı. Araçlar: ${immediateTools.join(', ')}`;
     }
+
+    // Split into thread messages on "|||"
+    const messages = rawText
+      .split('|||')
+      .map((s: string) => s.trim())
+      .filter((s: string) => s.length > 0);
 
     return NextResponse.json({
       success: true,
-      response: responseText,
+      response: messages[0] || rawText,   // backwards compat
+      messages,                            // thread messages
       toolsUsed: immediateTools,
       toolResults,
       pendingActions: pendingActions.length > 0 ? pendingActions : undefined,
