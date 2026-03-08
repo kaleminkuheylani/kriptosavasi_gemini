@@ -1325,7 +1325,16 @@ THREAD FORMAT: Yanıtını "|||" ile ayırdığın 2-3 kısa mesaj olarak ver. H
 
     const systemPrompt = `Sen profesyonel bir BIST hisse analiz asistanısın. Türkçe yanıt ver.
 Yatırım TAVSİYESİ VERME, sadece ANALİZ yap. Emoji kullan ama abartma. Her mesaj maksimum 5 madde içersin.
-Yanıtı her zaman "|||" ayracıyla ayrılmış kısa mesajlar olarak döndür. Başka format kullanma.`;
+Yanıtı MUTLAKA şu formatta döndür:
+
+[thread mesajları "|||" ile ayrılmış]
+SORULAR: soru1 | soru2 | soru3
+
+Örnek:
+📊 İlk mesaj içeriği ||| 🔍 İkinci mesaj içeriği ||| ⚠️ Üçüncü mesaj içeriği
+SORULAR: GARAN 3 ay sonraki fiyatı ne olur? | AKBNK ile karşılaştırır mısın? | Temettü verimi nedir?
+
+"SORULAR:" satırı her zaman son satır olmalı, 3 kısa Türkçe soru içermeli.`;
 
     const finalResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
@@ -1357,8 +1366,21 @@ Yanıtı her zaman "|||" ayracıyla ayrılmış kısa mesajlar olarak döndür. 
       rawText = `İşlem tamamlandı. Araçlar: ${immediateTools.join(', ')}`;
     }
 
+    // Extract "SORULAR:" line for suggested questions
+    let suggestedQuestions: string[] = [];
+    let cleanText = rawText;
+    const soruMatch = rawText.match(/\nSOROLAR:\s*(.+)$|SORULAR:\s*(.+)$/m);
+    if (soruMatch) {
+      const soruStr = soruMatch[1] || soruMatch[2] || '';
+      suggestedQuestions = soruStr
+        .split('|')
+        .map((s: string) => s.trim())
+        .filter((s: string) => s.length > 5);
+      cleanText = rawText.replace(/\nSOROLAR:.+$|SORULAR:.+$/m, '').trim();
+    }
+
     // Split into thread messages on "|||"
-    const messages = rawText
+    const messages = cleanText
       .split('|||')
       .map((s: string) => s.trim())
       .filter((s: string) => s.length > 0);
@@ -1367,6 +1389,7 @@ Yanıtı her zaman "|||" ayracıyla ayrılmış kısa mesajlar olarak döndür. 
       success: true,
       response: messages[0] || rawText,   // backwards compat
       messages,                            // thread messages
+      suggestedQuestions,
       toolsUsed: immediateTools,
       toolResults,
       pendingActions: pendingActions.length > 0 ? pendingActions : undefined,

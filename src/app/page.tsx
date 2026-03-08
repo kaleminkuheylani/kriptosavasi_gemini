@@ -111,6 +111,7 @@ interface ChatMessage {
   content: string;
   toolsUsed?: string[];
   pendingActions?: PendingAction[];
+  suggestedQuestions?: string[];
   timestamp: Date;
 }
 
@@ -437,16 +438,36 @@ export default function Home() {
         }]);
         setLastToolsUsed(data.toolsUsed || []);
 
+        const suggestedQs: string[] = data.suggestedQuestions || [];
+        const lastIdx = threadMessages.length - 1;
+
         // Remaining thread messages arrive with 600ms stagger
+        // Last message gets suggestedQuestions chips
         threadMessages.slice(1).forEach((msg: string, idx: number) => {
+          const isLast = idx === lastIdx - 1;
           setTimeout(() => {
             setChatMessages(prev => [...prev, {
               role: 'assistant',
               content: msg,
+              suggestedQuestions: isLast && suggestedQs.length > 0 ? suggestedQs : undefined,
               timestamp: new Date(),
             }]);
           }, (idx + 1) * 600);
         });
+
+        // If only one thread message, attach suggestedQuestions to it
+        if (threadMessages.length === 1 && suggestedQs.length > 0) {
+          setTimeout(() => {
+            setChatMessages(prev => {
+              const updated = [...prev];
+              const last = updated[updated.length - 1];
+              if (last?.role === 'assistant') {
+                updated[updated.length - 1] = { ...last, suggestedQuestions: suggestedQs };
+              }
+              return updated;
+            });
+          }, 100);
+        }
 
         if (data.toolsUsed?.some((t: string) => t.includes('watchlist') || t.includes('alert'))) {
           fetchWatchlist();
@@ -1608,6 +1629,22 @@ export default function Home() {
                             </Badge>
                           );
                         })}
+                      </div>
+                    )}
+                    {msg.suggestedQuestions && msg.suggestedQuestions.length > 0 && (
+                      <div className="mt-3 pt-3 border-t border-slate-700">
+                        <p className="text-xs text-slate-500 mb-2">💡 İlgili sorular:</p>
+                        <div className="flex flex-col gap-1.5">
+                          {msg.suggestedQuestions.map((q, qIdx) => (
+                            <button
+                              key={qIdx}
+                              onClick={() => { setChatInput(q); }}
+                              className="text-left text-xs px-3 py-1.5 rounded-lg bg-slate-700/60 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-600/40 hover:border-emerald-500/50 transition-colors"
+                            >
+                              {q}
+                            </button>
+                          ))}
+                        </div>
                       </div>
                     )}
                     {msg.pendingActions && msg.pendingActions.length > 0 && (
