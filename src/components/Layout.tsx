@@ -1,12 +1,11 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  LayoutDashboard, 
-  Newspaper, 
-  Wallet, 
-  TrendingUp, 
-  ChevronRight, 
-  Menu, 
+import {
+  Newspaper,
+  Briefcase,
+  TrendingUp,
+  ChevronRight,
+  Menu,
   X,
   Search,
   Bell,
@@ -44,9 +43,8 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTab, sear
 
   const navItems = [
     { id: 'markets', label: 'Piyasalar', icon: Zap },
-    { id: 'kripto', label: 'Kripto', icon: BarChart3 },
-    { id: 'doviz', label: 'Döviz', icon: TrendingUp },
-    { id: 'altin', label: 'Altın', icon: Wallet },
+    { id: 'varliklar', label: 'Varlıklar', icon: Briefcase },
+    { id: 'borsa', label: 'Borsa', icon: TrendingUp },
     { id: 'news', label: 'Haberler', icon: Newspaper },
   ];
 

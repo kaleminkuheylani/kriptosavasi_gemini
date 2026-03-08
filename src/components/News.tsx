@@ -1,23 +1,45 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { ExternalLink, Clock, Share2, X } from 'lucide-react';
-import { MOCK_NEWS } from '../constants';
+import { ExternalLink, Clock, Share2 } from 'lucide-react';
 
 interface NewsProps {
   searchQuery: string;
 }
 
 const News: React.FC<NewsProps> = ({ searchQuery }) => {
-  const filteredNews = MOCK_NEWS.filter(item => 
-    item.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
-    item.summary.toLowerCase().includes(searchQuery.toLowerCase())
+  const [newsItems, setNewsItems] = React.useState<any[]>([]);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    const fetchNews = async () => {
+      try {
+        const res = await fetch('/api/news');
+        const data = await res.json();
+        setNewsItems(data.items || []);
+      } catch (error) {
+        console.error(error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchNews();
+  }, []);
+
+  const filteredNews = newsItems.filter(item => 
+    (item.title || '').toLowerCase().includes(searchQuery.toLowerCase()) || 
+    (item.summary || '').toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  if (loading) {
+    return <div className="py-20 text-center text-zinc-500">Cointelegraph haberleri yükleniyor...</div>;
+  }
 
   return (
     <div className="space-y-8">
       <header>
-        <h1 className="text-4xl font-bold tracking-tight mb-2">TelegraphCoin Haberleri</h1>
-        <p className="text-zinc-500 text-sm">Piyasayı etkileyen en son gelişmeler ve analizler.</p>
+        <h1 className="text-4xl font-bold tracking-tight mb-2">Cointelegraph Haberleri</h1>
+        <p className="text-zinc-500 text-sm">Cointelegraph API/RSS akışından gelen en güncel haberler.</p>
       </header>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -56,9 +78,14 @@ const News: React.FC<NewsProps> = ({ searchQuery }) => {
                     {item.summary}
                   </p>
                   <div className="flex items-center gap-4 pt-2">
-                    <button className="flex items-center gap-2 text-xs font-bold text-white hover:text-emerald-500 transition-colors">
+                    <a
+                      href={item.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center gap-2 text-xs font-bold text-white hover:text-emerald-500 transition-colors"
+                    >
                       Devamını Oku <ExternalLink size={14} />
-                    </button>
+                    </a>
                     <button className="p-2 text-zinc-500 hover:text-white transition-colors">
                       <Share2 size={16} />
                     </button>
