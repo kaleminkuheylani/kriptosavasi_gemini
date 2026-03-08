@@ -14,24 +14,22 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Z.ai Code Scaffold - AI-Powered Development",
-  description: "Modern Next.js scaffold optimized for AI-powered development with Z.ai. Built with TypeScript, Tailwind CSS, and shadcn/ui.",
-  keywords: ["Z.ai", "Next.js", "TypeScript", "Tailwind CSS", "shadcn/ui", "AI development", "React"],
-  authors: [{ name: "Z.ai Team" }],
+  title: "BIST 100 Analiz - Canlı Hisse Takibi ve AI Analizi",
+  description: "Borsa İstanbul hisse senetleri için canlı fiyatlar, grafikler, takip listesi ve AI destekli teknik analiz. Asenax API ile gerçek zamanlı veriler.",
+  keywords: ["BIST", "BIST 100", "Borsa İstanbul", "hisse senedi", "borsa", "yatırım", "AI analiz", "teknik analiz"],
+  authors: [{ name: "BIST 100 Analiz" }],
   icons: {
-    icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
+    icon: "/logo.svg",
   },
   openGraph: {
-    title: "Z.ai Code Scaffold",
-    description: "AI-powered development with modern React stack",
-    url: "https://chat.z.ai",
-    siteName: "Z.ai",
+    title: "BIST 100 Analiz",
+    description: "Canlı hisse takibi ve AI destekli analiz",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Z.ai Code Scaffold",
-    description: "AI-powered development with modern React stack",
+    title: "BIST 100 Analiz",
+    description: "Canlı hisse takibi ve AI destekli analiz",
   },
 };
 
