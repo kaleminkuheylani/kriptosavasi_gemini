@@ -1,10 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { cookies } from 'next/headers';
+
+// Helper - Get current user
+async function getCurrentUser() {
+  const cookieStore = await cookies();
+  const userId = cookieStore.get('userId')?.value;
+  return userId;
+}
 
 // GET - Tüm bildirimleri getir
 export async function GET() {
   try {
+    const userId = await getCurrentUser();
+    
     const alerts = await db.priceAlert.findMany({
+      where: userId ? { userId } : { userId: null },
       orderBy: {
         createdAt: 'desc',
       },
@@ -28,6 +39,7 @@ export async function GET() {
 // POST - Yeni bildirim oluştur
 export async function POST(request: NextRequest) {
   try {
+    const userId = await getCurrentUser();
     const body = await request.json();
     const { symbol, targetPrice, condition } = body;
 
@@ -52,6 +64,7 @@ export async function POST(request: NextRequest) {
         condition,
         active: true,
         triggered: false,
+        userId: userId || null,
       },
     });
 

@@ -1,141 +1,118 @@
-# 🚀 Welcome to Z.ai Code Scaffold
+# BIST 100 AI Finans Asistani
 
-A modern, production-ready web application scaffold powered by cutting-edge technologies, designed to accelerate your development with [Z.ai](https://chat.z.ai)'s AI-powered coding assistance.
+BIST 100 hisse senetleri icin yapay zeka destekli finansal analiz platformu.
 
-## ✨ Technology Stack
+## Ozellikler
 
-This scaffold provides a robust foundation built with:
+### Hisse Senedi Analizi
+- Canli BIST 100 hisse fiyatlari
+- Gecmis fiyat verileri ve grafikler
+- Teknik analiz gostergeleri (SMA, trend)
+- AI destekli grafik analizi (VLM)
 
-### 🎯 Core Framework
-- **⚡ Next.js 16** - The React framework for production with App Router
-- **📘 TypeScript 5** - Type-safe JavaScript for better developer experience
-- **🎨 Tailwind CSS 4** - Utility-first CSS framework for rapid UI development
+### AI Finans Asistani
+- 15 farkli AI araci
+- Hisse fiyati sorgulama
+- Piyasa tarama
+- KAP bildirimleri
+- Web aramasi
+- TXT dosya analizi
+- Grafik resim analizi
 
-### 🧩 UI Components & Styling
-- **🧩 shadcn/ui** - High-quality, accessible components built on Radix UI
-- **🎯 Lucide React** - Beautiful & consistent icon library
-- **🌈 Framer Motion** - Production-ready motion library for React
-- **🎨 Next Themes** - Perfect dark mode in 2 lines of code
+### Kullanici Sistemi
+- Rumuz ile kayit/giris (sifresiz)
+- Kisisel takip listesi
+- Fiyat bildirimleri
+- 7 gunluk oturum
 
-### 📋 Forms & Validation
-- **🎣 React Hook Form** - Performant forms with easy validation
-- **✅ Zod** - TypeScript-first schema validation
+### Veri Kaynaklari
+- Asenax API (canli hisse verileri)
+- Finance API (gecmis veriler)
+- Groq API (LLM)
+- z-ai-web-dev-sdk (VLM, web arama)
 
-### 🔄 State Management & Data Fetching
-- **🐻 Zustand** - Simple, scalable state management
-- **🔄 TanStack Query** - Powerful data synchronization for React
-- **🌐 Fetch** - Promise-based HTTP request
+## Teknoloji Yigini
 
-### 🗄️ Database & Backend
-- **🗄️ Prisma** - Next-generation TypeScript ORM
-- **🔐 NextAuth.js** - Complete open-source authentication solution
+- Next.js 16 (App Router)
+- TypeScript 5
+- Tailwind CSS 4
+- shadcn/ui
+- Prisma ORM + SQLite
+- Recharts (grafikler)
+- z-ai-web-dev-sdk
 
-### 🎨 Advanced UI Features
-- **📊 TanStack Table** - Headless UI for building tables and datagrids
-- **🖱️ DND Kit** - Modern drag and drop toolkit for React
-- **📊 Recharts** - Redefined chart library built with React and D3
-- **🖼️ Sharp** - High performance image processing
-
-### 🌍 Internationalization & Utilities
-- **🌍 Next Intl** - Internationalization library for Next.js
-- **📅 Date-fns** - Modern JavaScript date utility library
-- **🪝 ReactUse** - Collection of essential React hooks for modern development
-
-## 🎯 Why This Scaffold?
-
-- **🏎️ Fast Development** - Pre-configured tooling and best practices
-- **🎨 Beautiful UI** - Complete shadcn/ui component library with advanced interactions
-- **🔒 Type Safety** - Full TypeScript configuration with Zod validation
-- **📱 Responsive** - Mobile-first design principles with smooth animations
-- **🗄️ Database Ready** - Prisma ORM configured for rapid backend development
-- **🔐 Auth Included** - NextAuth.js for secure authentication flows
-- **📊 Data Visualization** - Charts, tables, and drag-and-drop functionality
-- **🌍 i18n Ready** - Multi-language support with Next Intl
-- **🚀 Production Ready** - Optimized build and deployment settings
-- **🤖 AI-Friendly** - Structured codebase perfect for AI assistance
-
-## 🚀 Quick Start
+## Kurulum
 
 ```bash
-# Install dependencies
+# Bagimliliklari yukle
 bun install
 
-# Start development server
+# Veritabani olustur
+bun run db:push
+
+# Gelistirme sunucusunu baslat
 bun run dev
-
-# Build for production
-bun run build
-
-# Start production server
-bun start
 ```
 
-Open [http://localhost:3000](http://localhost:3000) to see your application running.
+Uygulama http://localhost:3000 adresinde calisacaktir.
 
-## 🤖 Powered by Z.ai
+## API Endpointleri
 
-This scaffold is optimized for use with [Z.ai](https://chat.z.ai) - your AI assistant for:
+| Endpoint | Method | Aciklama |
+|----------|--------|----------|
+| /api/stocks | GET | Tum hisseleri listele |
+| /api/stocks/[symbol] | GET | Hisse detayi ve grafik |
+| /api/auth | GET/POST/DELETE | Kullanici islemleri |
+| /api/watchlist | CRUD | Takip listesi |
+| /api/alerts | CRUD | Fiyat bildirimleri |
+| /api/agent | POST | AI Agent |
 
-- **💻 Code Generation** - Generate components, pages, and features instantly
-- **🎨 UI Development** - Create beautiful interfaces with AI assistance  
-- **🔧 Bug Fixing** - Identify and resolve issues with intelligent suggestions
-- **📝 Documentation** - Auto-generate comprehensive documentation
-- **🚀 Optimization** - Performance improvements and best practices
+## AI Agent Araclari
 
-Ready to build something amazing? Start chatting with Z.ai at [chat.z.ai](https://chat.z.ai) and experience the future of AI-powered development!
+1. get_stock_price - Hisse fiyati
+2. get_stock_history - Gecmis veriler
+3. get_watchlist - Takip listesi
+4. add_to_watchlist - Listeye ekle
+5. remove_from_watchlist - Listeden kaldir
+6. web_search - Web aramasi
+7. read_document - Dokuman okuma
+8. read_txt_file - TXT analizi
+9. get_kap_data - KAP bildirimleri
+10. scan_market - Piyasa tarama
+11. get_top_gainers - Yukselenler
+12. get_top_losers - Dusenler
+13. get_price_alerts - Bildirimler
+14. create_price_alert - Bildirim olustur
+15. analyze_chart_image - Grafik analizi
 
-## 📁 Project Structure
+## Proje Yapisi
 
 ```
 src/
-├── app/                 # Next.js App Router pages
-├── components/          # Reusable React components
-│   └── ui/             # shadcn/ui components
-├── hooks/              # Custom React hooks
-└── lib/                # Utility functions and configurations
+├── app/
+│   ├── api/
+│   │   ├── agent/route.ts      # AI Agent
+│   │   ├── auth/route.ts       # Kimlik dogrulama
+│   │   ├── alerts/route.ts     # Bildirimler
+│   │   ├── watchlist/route.ts  # Takip listesi
+│   │   └── stocks/             # Hisse verileri
+│   └── page.tsx                # Ana sayfa
+├── components/ui/              # shadcn/ui bilesenleri
+├── hooks/                      # React hooklari
+└── lib/                        # Yardimci fonksiyonlar
+
+prisma/
+└── schema.prisma               # Veritabani semasi
 ```
 
-## 🎨 Available Features & Components
+## Ortam Degiskenleri
 
-This scaffold includes a comprehensive set of modern web development tools:
+.env dosyasinda:
+```
+DATABASE_URL="file:./db/custom.db"
+GROQ_API_KEY="your-groq-api-key"
+```
 
-### 🧩 UI Components (shadcn/ui)
-- **Layout**: Card, Separator, Aspect Ratio, Resizable Panels
-- **Forms**: Input, Textarea, Select, Checkbox, Radio Group, Switch
-- **Feedback**: Alert, Toast (Sonner), Progress, Skeleton
-- **Navigation**: Breadcrumb, Menubar, Navigation Menu, Pagination
-- **Overlay**: Dialog, Sheet, Popover, Tooltip, Hover Card
-- **Data Display**: Badge, Avatar, Calendar
+## Lisans
 
-### 📊 Advanced Data Features
-- **Tables**: Powerful data tables with sorting, filtering, pagination (TanStack Table)
-- **Charts**: Beautiful visualizations with Recharts
-- **Forms**: Type-safe forms with React Hook Form + Zod validation
-
-### 🎨 Interactive Features
-- **Animations**: Smooth micro-interactions with Framer Motion
-- **Drag & Drop**: Modern drag-and-drop functionality with DND Kit
-- **Theme Switching**: Built-in dark/light mode support
-
-### 🔐 Backend Integration
-- **Authentication**: Ready-to-use auth flows with NextAuth.js
-- **Database**: Type-safe database operations with Prisma
-- **API Client**: HTTP requests with Fetch + TanStack Query
-- **State Management**: Simple and scalable with Zustand
-
-### 🌍 Production Features
-- **Internationalization**: Multi-language support with Next Intl
-- **Image Optimization**: Automatic image processing with Sharp
-- **Type Safety**: End-to-end TypeScript with Zod validation
-- **Essential Hooks**: 100+ useful React hooks with ReactUse for common patterns
-
-## 🤝 Get Started with Z.ai
-
-1. **Clone this scaffold** to jumpstart your project
-2. **Visit [chat.z.ai](https://chat.z.ai)** to access your AI coding assistant
-3. **Start building** with intelligent code generation and assistance
-4. **Deploy with confidence** using the production-ready setup
-
----
-
-Built with ❤️ for the developer community. Supercharged by [Z.ai](https://chat.z.ai) 🚀
+MIT

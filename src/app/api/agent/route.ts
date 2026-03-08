@@ -1,8 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { PrismaClient } from '@prisma/client';
 import ZAI from 'z-ai-web-dev-sdk';
+import { cookies } from 'next/headers';
 
 const prisma = new PrismaClient();
+
+// Helper - Get current user
+async function getCurrentUserId() {
+  const cookieStore = await cookies();
+  return cookieStore.get('userId')?.value || null;
+}
 
 // Tool Definitions
 const TOOLS = {
@@ -34,12 +41,16 @@ const TOOLS = {
     description: 'Web sayfası veya doküman okur, içeriği çıkarır',
     parameters: { url: 'string - Okunacak URL' },
   },
+  read_txt_file: {
+    description: 'TXT dosyası içeriğini okur ve analiz eder. Kullanıcının yüklediği rapor, analiz veya metin dosyalarını işler.',
+    parameters: { content: 'string - TXT dosyasının içeriği', filename: 'string - Dosya adı (opsiyonel)' },
+  },
   get_kap_data: {
     description: 'KAP (Kamu Aydınlatma Platformu) bildirimlerini getirir',
     parameters: { symbol: 'string - Hisse kodu (opsiyonel)' },
   },
   scan_market: {
-    description: 'Tüm piyasayı tarar, endüstri bazlı analiz yapar',
+    description: 'Tüm piyasayı tarar, sektör bazlı analiz yapar',
     parameters: { industry: 'string - Sektör adı (opsiyonel)' },
   },
   get_top_gainers: {
@@ -58,17 +69,29 @@ const TOOLS = {
     description: 'Fiyat bildirimi oluşturur',
     parameters: { symbol: 'string', targetPrice: 'number', condition: '"above" | "below"' },
   },
+  analyze_chart_image: {
+    description: 'Hisse grafiği veya finansal grafik görselini VLM ile analiz eder. Trend, destek/direnç, formasyon tespiti yapar.',
+    parameters: { imageBase64: 'string - Base64 encoded image', symbol: 'string - Hisse kodu (opsiyonel)' },
+  },
 };
 
-// Tool Implementations
+// Stock price cache
+const stockPriceCache: Record<string, { data: unknown; timestamp: number }> = {};
+const CACHE_TTL = 60000; // 1 minute
+
 async function getStockPrice(symbol: string) {
+  const cached = stockPriceCache[symbol];
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    return cached.data;
+  }
+
   try {
     const response = await fetch(`https://api.asenax.com/bist/get/${symbol.toUpperCase()}`);
     const data = await response.json();
     
     if (data.code === "0" && data.data?.hisseYuzeysel) {
       const d = data.data.hisseYuzeysel;
-      return {
+      const result = {
         success: true,
         data: {
           symbol: d.sembol,
@@ -81,8 +104,12 @@ async function getStockPrice(symbol: string) {
           low: d.dusuk,
           open: d.acilis,
           previousClose: d.dunkukapanis,
+          ceiling: d.tavan,
+          floor: d.taban,
         },
       };
+      stockPriceCache[symbol] = { data: result, timestamp: Date.now() };
+      return result;
     }
     return { success: false, error: 'Hisse bulunamadı' };
   } catch (error) {
@@ -126,7 +153,18 @@ async function getStockHistory(symbol: string, period: string = '1M') {
           volume: e.volume,
         }));
       
-      return { success: true, data: historical, count: historical.length };
+      // Calculate technical indicators
+      const closes = historical.map(h => h.close);
+      const sma20 = closes.length >= 20 ? closes.slice(-20).reduce((a, b) => a + b, 0) / 20 : null;
+      const sma50 = closes.length >= 50 ? closes.slice(-50).reduce((a, b) => a + b, 0) / 50 : null;
+      
+      return { 
+        success: true, 
+        data: historical, 
+        count: historical.length,
+        indicators: { sma20, sma50 },
+        trend: sma20 && sma50 ? (sma20 > sma50 ? 'BULLISH' : 'BEARISH') : 'NEUTRAL',
+      };
     }
     return { success: false, error: 'Veri bulunamadı' };
   } catch (error) {
@@ -134,10 +172,11 @@ async function getStockHistory(symbol: string, period: string = '1M') {
   }
 }
 
-async function getWatchlist() {
+async function getWatchlist(userId: string | null) {
   try {
-    const items = await prisma.watchlistItem.findMany({
-      orderBy: { createdAt: 'desc' },
+    const items = await prisma.watchlistItem.findMany({ 
+      where: userId ? { userId } : { userId: null },
+      orderBy: { createdAt: 'desc' } 
     });
     return { success: true, data: items, count: items.length };
   } catch (error) {
@@ -145,18 +184,15 @@ async function getWatchlist() {
   }
 }
 
-async function addToWatchlist(symbol: string, name: string) {
+async function addToWatchlist(symbol: string, name: string, userId: string | null) {
   try {
     const existing = await prisma.watchlistItem.findFirst({
-      where: { symbol: symbol.toUpperCase() },
+      where: { symbol: symbol.toUpperCase(), userId: userId || null },
     });
-    
-    if (existing) {
-      return { success: false, error: 'Bu hisse zaten takip listesinde' };
-    }
+    if (existing) return { success: false, error: 'Bu hisse zaten takip listesinde' };
     
     const item = await prisma.watchlistItem.create({
-      data: { symbol: symbol.toUpperCase(), name },
+      data: { symbol: symbol.toUpperCase(), name, userId: userId || null },
     });
     return { success: true, data: item };
   } catch (error) {
@@ -164,10 +200,10 @@ async function addToWatchlist(symbol: string, name: string) {
   }
 }
 
-async function removeFromWatchlist(symbol: string) {
+async function removeFromWatchlist(symbol: string, userId: string | null) {
   try {
-    await prisma.watchlistItem.deleteMany({
-      where: { symbol: symbol.toUpperCase() },
+    await prisma.watchlistItem.deleteMany({ 
+      where: { symbol: symbol.toUpperCase(), userId: userId || null } 
     });
     return { success: true, message: `${symbol} takip listesinden kaldırıldı` };
   } catch (error) {
@@ -206,101 +242,111 @@ async function getKapData(symbol?: string) {
   try {
     const zai = await ZAI.create();
     const query = symbol 
-      ? `${symbol} hisse KAP bildirim Kamu Aydınlatma Platformu`
-      : 'BIST KAP bildirimler Kamu Aydınlatma Platformu bugün';
+      ? `${symbol} hisse KAP bildirim Kamu Aydınlatma Platformu son`
+      : 'BIST KAP bildirimler Kamu Aydınlatma Platformu bugün önemli';
     
     const results = await zai.functions.invoke('web_search', { query, num: 10 });
-    
-    return { 
-      success: true, 
-      data: results,
-      source: 'KAP Search',
-    };
+    return { success: true, data: results, source: 'KAP Search' };
   } catch (error) {
     return { success: false, error: String(error) };
   }
 }
 
+// Market scanner with all stock prices
+let marketCache: { data: unknown; timestamp: number } | null = null;
+const MARKET_CACHE_TTL = 120000; // 2 minutes
+
 async function scanMarket(industry?: string) {
+  if (marketCache && Date.now() - marketCache.timestamp < MARKET_CACHE_TTL) {
+    return marketCache.data;
+  }
+
   try {
-    const response = await fetch('https://api.asenax.com/bist/list');
-    const data = await response.json();
+    // Get stock list
+    const listResponse = await fetch('https://api.asenax.com/bist/list');
+    const listData = await listResponse.json();
     
-    let stocks = [];
-    if (data.code === "0" && Array.isArray(data.data)) {
-      stocks = data.data
+    let stocks: { code: string; name: string }[] = [];
+    if (listData.code === "0" && Array.isArray(listData.data)) {
+      stocks = listData.data
         .filter((item: { tip?: string }) => item.tip === "Hisse")
-        .map((item: { kod?: string; ad?: string }) => ({
-          code: item.kod,
-          name: item.ad,
-        }));
+        .map((item: { kod?: string; ad?: string }) => ({ code: item.kod, name: item.ad }));
     }
     
-    // Get prices for top stocks
-    const results = [];
-    const toFetch = industry ? stocks.slice(0, 30) : stocks.slice(0, 50);
+    // Batch fetch prices
+    const results: Array<{
+      code: string;
+      name: string;
+      price: number;
+      changePercent: number;
+      volume: number;
+      high: number;
+      low: number;
+    }> = [];
     
-    for (const stock of toFetch) {
-      const priceData = await getStockPrice(stock.code);
-      if (priceData.success && priceData.data.price > 0) {
-        results.push({
-          ...stock,
-          ...priceData.data,
-        });
-      }
+    const toFetch = stocks.slice(0, 100);
+    
+    // Parallel fetch in batches
+    const batchSize = 20;
+    for (let i = 0; i < toFetch.length; i += batchSize) {
+      const batch = toFetch.slice(i, i + batchSize);
+      const batchResults = await Promise.all(
+        batch.map(async (stock) => {
+          const priceData = await getStockPrice(stock.code);
+          if (priceData.success && priceData.data.price > 0) {
+            return {
+              code: stock.code,
+              name: stock.name,
+              ...priceData.data,
+            };
+          }
+          return null;
+        })
+      );
+      results.push(...batchResults.filter(Boolean) as typeof results);
     }
     
-    // Sort by performance
+    // Sort and categorize
     const sorted = results.sort((a, b) => b.changePercent - a.changePercent);
     
-    return { 
+    const result = { 
       success: true, 
       data: {
         all: sorted,
-        gainers: sorted.filter(s => s.changePercent > 0).slice(0, 10),
-        losers: sorted.filter(s => s.changePercent < 0).sort((a, b) => a.changePercent - b.changePercent).slice(0, 10),
+        gainers: sorted.filter(s => s.changePercent > 0).slice(0, 15),
+        losers: sorted.filter(s => s.changePercent < 0).sort((a, b) => a.changePercent - b.changePercent).slice(0, 15),
         total: sorted.length,
+        avgChange: sorted.reduce((a, b) => a + b.changePercent, 0) / sorted.length,
       },
     };
+    
+    marketCache = { data: result, timestamp: Date.now() };
+    return result;
   } catch (error) {
     return { success: false, error: String(error) };
   }
 }
 
 async function getTopGainers(limit: number = 10) {
-  try {
-    const marketData = await scanMarket();
-    if (marketData.success && marketData.data) {
-      return { 
-        success: true, 
-        data: marketData.data.gainers.slice(0, limit),
-      };
-    }
-    return { success: false, error: 'Veri alınamadı' };
-  } catch (error) {
-    return { success: false, error: String(error) };
+  const marketData = await scanMarket();
+  if (marketData.success && marketData.data) {
+    return { success: true, data: marketData.data.gainers.slice(0, limit) };
   }
+  return { success: false, error: 'Veri alınamadı' };
 }
 
 async function getTopLosers(limit: number = 10) {
-  try {
-    const marketData = await scanMarket();
-    if (marketData.success && marketData.data) {
-      return { 
-        success: true, 
-        data: marketData.data.losers.slice(0, limit),
-      };
-    }
-    return { success: false, error: 'Veri alınamadı' };
-  } catch (error) {
-    return { success: false, error: String(error) };
+  const marketData = await scanMarket();
+  if (marketData.success && marketData.data) {
+    return { success: true, data: marketData.data.losers.slice(0, limit) };
   }
+  return { success: false, error: 'Veri alınamadı' };
 }
 
-async function getPriceAlerts() {
+async function getPriceAlerts(userId: string | null) {
   try {
     const alerts = await prisma.priceAlert.findMany({
-      where: { active: true },
+      where: { active: true, userId: userId || null },
       orderBy: { createdAt: 'desc' },
     });
     return { success: true, data: alerts, count: alerts.length };
@@ -309,14 +355,10 @@ async function getPriceAlerts() {
   }
 }
 
-async function createPriceAlert(symbol: string, targetPrice: number, condition: 'above' | 'below') {
+async function createPriceAlert(symbol: string, targetPrice: number, condition: 'above' | 'below', userId: string | null) {
   try {
     const alert = await prisma.priceAlert.create({
-      data: {
-        symbol: symbol.toUpperCase(),
-        targetPrice,
-        condition,
-      },
+      data: { symbol: symbol.toUpperCase(), targetPrice, condition, userId: userId || null },
     });
     return { success: true, data: alert };
   } catch (error) {
@@ -324,80 +366,11 @@ async function createPriceAlert(symbol: string, targetPrice: number, condition: 
   }
 }
 
-// Tool Executor
-async function executeTool(toolName: string, params: Record<string, unknown>) {
-  switch (toolName) {
-    case 'get_stock_price':
-      return await getStockPrice(params.symbol as string);
-    case 'get_stock_history':
-      return await getStockHistory(params.symbol as string, params.period as string);
-    case 'get_watchlist':
-      return await getWatchlist();
-    case 'add_to_watchlist':
-      return await addToWatchlist(params.symbol as string, params.name as string);
-    case 'remove_from_watchlist':
-      return await removeFromWatchlist(params.symbol as string);
-    case 'web_search':
-      return await webSearch(params.query as string);
-    case 'read_document':
-      return await readDocument(params.url as string);
-    case 'get_kap_data':
-      return await getKapData(params.symbol as string | undefined);
-    case 'scan_market':
-      return await scanMarket(params.industry as string | undefined);
-    case 'get_top_gainers':
-      return await getTopGainers(params.limit as number | undefined);
-    case 'get_top_losers':
-      return await getTopLosers(params.limit as number | undefined);
-    case 'get_price_alerts':
-      return await getPriceAlerts();
-    case 'create_price_alert':
-      return await createPriceAlert(
-        params.symbol as string,
-        params.targetPrice as number,
-        params.condition as 'above' | 'below'
-      );
-    default:
-      return { success: false, error: `Bilinmeyen tool: ${toolName}` };
-  }
-}
-
-// AI Agent Handler
-export async function POST(request: NextRequest) {
+// TXT File Analysis
+async function readTxtFile(content: string, filename?: string) {
   try {
-    const body = await request.json();
-    const { message, conversationHistory = [] } = body;
-
-    if (!message) {
-      return NextResponse.json({ success: false, error: 'Mesaj gerekli' }, { status: 400 });
-    }
-
-    // Build system prompt with tool definitions
-    const toolDescriptions = Object.entries(TOOLS)
-      .map(([name, info]) => `- ${name}: ${info.description}`)
-      .join('\n');
-
-    const systemPrompt = `Sen BIST 100 hisse analizi yapan bir AI asistanısın. Türkçe yanıt ver.
-
-Kullanılabilir Araçların:
-${toolDescriptions}
-
-Kullanıcı sorusuna göre uygun araçları kullan. Yanıtında:
-1. Hangi araçları kullandığını belirt
-2. Sonuçları özetle
-3. Öneri veya yorum yap
-
-JSON formatında yanıt ver:
-{
-  "tools_to_use": ["tool1", "tool2"],
-  "tool_params": { "tool1": {...}, "tool2": {...} },
-  "explanation": "Kullanıcıya açıkla"
-}
-
-ÖNEMLİ: Sadece JSON döndür, başka bir şey yazma.`;
-
-    // Call AI to determine which tools to use
-    const aiResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    // Analyze the TXT content using Groq
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -406,88 +379,440 @@ JSON formatında yanıt ver:
       body: JSON.stringify({
         model: 'llama-3.3-70b-versatile',
         messages: [
-          { role: 'system', content: systemPrompt },
-          ...conversationHistory.map((m: { role: string; content: string }) => ({
-            role: m.role,
-            content: m.content,
-          })),
-          { role: 'user', content: message },
+          {
+            role: 'system',
+            content: `Sen profesyonel bir finansal analiz asistanısın. Kullanıcının yüklediği TXT dosyasını analiz et ve:
+1. Dosyanın içeriğini özetle
+2. Finansal veriler varsa analiz et
+3. Önemli noktaları vurgula
+4. Varsa hisse senedi kodlarını tespit et
+5. Yatırımcı için önemli bilgileri çıkar
+
+Türkçe yanıt ver ve profesyonel bir rapor formatı kullan.`
+          },
+          {
+            role: 'user',
+            content: `Dosya adı: ${filename || 'bilinmiyor'}\n\nDosya içeriği:\n\`\`\`\n${content.slice(0, 10000)}\n\`\`\`\n\nBu dosyayı analiz et ve raporla.`
+          }
         ],
         temperature: 0.3,
-        max_tokens: 1000,
+        max_tokens: 2000,
       }),
     });
 
-    let toolsToUse: string[] = [];
-    let toolParams: Record<string, Record<string, unknown>> = {};
-    let explanation = '';
+    if (response.ok) {
+      const data = await response.json();
+      return {
+        success: true,
+        analysis: data.choices?.[0]?.message?.content,
+        filename,
+        contentLength: content.length,
+      };
+    }
+    
+    return { success: false, error: 'Analiz başarısız' };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
 
-    if (aiResponse.ok) {
-      const aiData = await aiResponse.json();
-      const aiContent = aiData.choices?.[0]?.message?.content || '';
-      
-      // Parse AI response
-      try {
-        const jsonMatch = aiContent.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          const parsed = JSON.parse(jsonMatch[0]);
-          toolsToUse = parsed.tools_to_use || [];
-          toolParams = parsed.tool_params || {};
-          explanation = parsed.explanation || '';
+// Chart Image Analysis with VLM
+async function analyzeChartImage(imageBase64: string, symbol?: string) {
+  try {
+    const zai = await ZAI.create();
+    
+    const prompt = `Sen profesyonel bir teknik analiz uzmanısın. Bu finansal grafiği detaylı şekilde analiz et ve:
+
+📊 **GENEL GÖRÜNÜM**
+- Grafik türünü belirle (çubuk, çizgi, mum vs.)
+- Zaman aralığını tahmin et
+- Genel trend yönü (yükseliş, düşüş, yatay)
+
+📈 **TEKNİK ANALİZ**
+- Destek seviyeleri (varsa)
+- Direnç seviyeleri (varsa)
+- Trend çizgileri
+- Formasyonlar (bayrak, omuz-baş-omuz, üçgen vs.)
+
+📉 **GÖSTERGELER** (görünürse)
+- Hareketli ortalamalar
+- Hacim analizi
+- RSI/MACD benzeri göstergeler
+
+⚠️ **RİSK DEĞERLENDİRMESİ**
+- Güncel pozisyon değerlendirmesi
+- Olası senaryolar
+- Risk noktaları
+
+💡 **SONUÇ**
+- Kısa vadeli görünüm
+- Orta vadeli görünüm
+- Dikkat edilmesi gerekenler
+
+${symbol ? `Hisse: ${symbol}` : ''}
+
+Not: Bu analiz yatırım tavsiyesi değildir, sadece teknik analiz özetidir.`;
+
+    const response = await zai.chat.completions.createVision({
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: imageBase64.startsWith('data:') ? imageBase64 : `data:image/png;base64,${imageBase64}` } }
+          ]
         }
-      } catch {
-        // Fallback: simple keyword-based tool selection
-        const lowerMessage = message.toLowerCase();
+      ],
+      thinking: { type: 'disabled' }
+    });
+
+    return {
+      success: true,
+      analysis: response.choices?.[0]?.message?.content,
+      symbol,
+    };
+  } catch (error) {
+    console.error('VLM Error:', error);
+    return { success: false, error: String(error) };
+  }
+}
+
+// Tool Executor
+async function executeTool(toolName: string, params: Record<string, unknown>, userId: string | null) {
+  const startTime = Date.now();
+  let result;
+  
+  switch (toolName) {
+    case 'get_stock_price':
+      result = await getStockPrice(params.symbol as string);
+      break;
+    case 'get_stock_history':
+      result = await getStockHistory(params.symbol as string, params.period as string);
+      break;
+    case 'get_watchlist':
+      result = await getWatchlist(userId);
+      break;
+    case 'add_to_watchlist':
+      result = await addToWatchlist(params.symbol as string, params.name as string, userId);
+      break;
+    case 'remove_from_watchlist':
+      result = await removeFromWatchlist(params.symbol as string, userId);
+      break;
+    case 'web_search':
+      result = await webSearch(params.query as string);
+      break;
+    case 'read_document':
+      result = await readDocument(params.url as string);
+      break;
+    case 'get_kap_data':
+      result = await getKapData(params.symbol as string | undefined);
+      break;
+    case 'scan_market':
+      result = await scanMarket(params.industry as string | undefined);
+      break;
+    case 'get_top_gainers':
+      result = await getTopGainers(params.limit as number | undefined);
+      break;
+    case 'get_top_losers':
+      result = await getTopLosers(params.limit as number | undefined);
+      break;
+    case 'get_price_alerts':
+      result = await getPriceAlerts(userId);
+      break;
+    case 'create_price_alert':
+      result = await createPriceAlert(
+        params.symbol as string,
+        params.targetPrice as number,
+        params.condition as 'above' | 'below',
+        userId
+      );
+      break;
+    case 'read_txt_file':
+      result = await readTxtFile(params.content as string, params.filename as string | undefined);
+      break;
+    case 'analyze_chart_image':
+      result = await analyzeChartImage(params.imageBase64 as string, params.symbol as string | undefined);
+      break;
+    default:
+      result = { success: false, error: `Bilinmeyen tool: ${toolName}` };
+  }
+  
+  return {
+    ...result,
+    _meta: { tool: toolName, duration: Date.now() - startTime },
+  };
+}
+
+// Intelligent Tool Selector - Determines which tools to use based on user query
+function selectToolsForQuery(message: string): { tools: string[]; params: Record<string, Record<string, unknown>> } {
+  const lowerMessage = message.toLowerCase();
+  const tools: string[] = [];
+  const params: Record<string, Record<string, unknown>> = {};
+  
+  // Extract stock symbols - more flexible matching
+  // Try uppercase first
+  let symbolMatches = message.match(/\b([A-Z]{3,5})\b/g) || [];
+  
+  // Also try to extract from mixed case (like "ASELSten", "ASELS'ten")
+  const upperMessage = message.toUpperCase();
+  const additionalMatches = upperMessage.match(/([A-Z]{3,5})/g) || [];
+  
+  // Combine and dedupe
+  const allMatches = [...symbolMatches, ...additionalMatches];
+  const symbols = [...new Set(allMatches.map(s => s.toUpperCase()))].filter(s => 
+    s.length >= 3 && s.length <= 5 && /^[A-Z]+$/.test(s)
+  );
+  
+  console.log('🔍 Extracted symbols:', symbols);
+  
+  // === PORTFOLIO/INVESTMENT QUESTIONS ===
+  if (lowerMessage.includes('lot') || lowerMessage.includes('portföy') || lowerMessage.includes('portfoy') || 
+      lowerMessage.includes('ne yapmalı') || lowerMessage.includes('ne yapmali') || lowerMessage.includes('satsam mı') || 
+      lowerMessage.includes('alsam mı') || lowerMessage.includes('tutmalı') || lowerMessage.includes('satmalı')) {
+    
+    if (symbols.length > 0) {
+      for (const symbol of symbols) {
+        tools.push('get_stock_price');
+        params[`get_stock_price_${symbol}`] = { symbol };
+        tools.push('get_stock_history');
+        params[`get_stock_history_${symbol}`] = { symbol, period: '3M' };
+        tools.push('get_kap_data');
+        params[`get_kap_data_${symbol}`] = { symbol };
+        tools.push('web_search');
+        params[`web_search_${symbol}`] = { query: `${symbol} hisse analiz haber yorum` };
+      }
+    }
+  }
+  
+  // === WHERE TO INVEST TODAY ===
+  else if (lowerMessage.includes('nereden') || lowerMessage.includes('nereye') || 
+           lowerMessage.includes('yatırım') || lowerMessage.includes('yativim') ||
+           lowerMessage.includes('öneri') || lowerMessage.includes('oneri') ||
+           lowerMessage.includes('hangi hisse') || lowerMessage.includes('bugün')) {
+    
+    tools.push('scan_market');
+    params['scan_market'] = {};
+    tools.push('get_top_gainers');
+    params['get_top_gainers'] = { limit: 10 };
+    tools.push('get_top_losers');
+    params['get_top_losers'] = { limit: 10 };
+    tools.push('get_kap_data');
+    params['get_kap_data'] = {};
+    tools.push('web_search');
+    params['web_search_market'] = { query: 'BIST borsa piyasa analiz bugün öneri' };
+  }
+  
+  // === ANALYSIS REQUESTS ===
+  else if (lowerMessage.includes('analiz') || lowerMessage.includes('analiz et') || 
+           lowerMessage.includes('incel') || lowerMessage.includes('detay')) {
+    
+    if (symbols.length > 0) {
+      for (const symbol of symbols) {
+        tools.push('get_stock_price');
+        params[`get_stock_price_${symbol}`] = { symbol };
+        tools.push('get_stock_history');
+        params[`get_stock_history_${symbol}`] = { symbol, period: '6M' };
+        tools.push('get_kap_data');
+        params[`get_kap_data_${symbol}`] = { symbol };
+      }
+    } else {
+      tools.push('scan_market');
+      params['scan_market'] = {};
+    }
+  }
+  
+  // === WATCHLIST OPERATIONS ===
+  else if (lowerMessage.includes('takip') || lowerMessage.includes('listem') || lowerMessage.includes('watchlist')) {
+    if (lowerMessage.includes('ekle') || lowerMessage.includes('ala') || lowerMessage.includes('kaydet')) {
+      if (symbols.length > 0) {
+        for (const symbol of symbols) {
+          tools.push('get_stock_price');
+          params[`get_stock_price_${symbol}`] = { symbol };
+          tools.push('add_to_watchlist');
+          params[`add_to_watchlist_${symbol}`] = { symbol, name: '' };
+        }
+      }
+    } else if (lowerMessage.includes('kaldır') || lowerMessage.includes('sil') || lowerMessage.includes('çıkar')) {
+      if (symbols.length > 0) {
+        for (const symbol of symbols) {
+          tools.push('remove_from_watchlist');
+          params[`remove_from_watchlist_${symbol}`] = { symbol };
+        }
+      }
+    } else {
+      tools.push('get_watchlist');
+      params['get_watchlist'] = {};
+    }
+  }
+  
+  // === ALERTS ===
+  else if (lowerMessage.includes('bildirim') || lowerMessage.includes('alarm') || lowerMessage.includes('uyarı')) {
+    if (lowerMessage.includes('oluştur') || lowerMessage.includes('kur') || lowerMessage.includes('ayarla')) {
+      if (symbols.length > 0) {
+        const priceMatch = message.match(/(\d+[.,]?\d*)/);
+        const targetPrice = priceMatch ? parseFloat(priceMatch[1].replace(',', '.')) : null;
+        const condition = lowerMessage.includes('üzer') || lowerMessage.includes('yukarı') ? 'above' : 'below';
         
-        if (lowerMessage.includes('takip') || lowerMessage.includes('watchlist')) {
-          toolsToUse.push('get_watchlist');
-        }
-        if (lowerMessage.includes('yükselen') || lowerMessage.includes('kazandıran')) {
-          toolsToUse.push('get_top_gainers');
-        }
-        if (lowerMessage.includes('düşen') || lowerMessage.includes('kaybettiren')) {
-          toolsToUse.push('get_top_losers');
-        }
-        if (lowerMessage.includes('kap') || lowerMessage.includes('bildirim')) {
-          toolsToUse.push('get_kap_data');
-        }
-        if (lowerMessage.includes('piyasa') || lowerMessage.includes('tara') || lowerMessage.includes('sektör')) {
-          toolsToUse.push('scan_market');
-        }
-        if (lowerMessage.includes('ara') || lowerMessage.includes('haber')) {
-          toolsToUse.push('web_search');
-          toolParams['web_search'] = { query: message };
-        }
-        
-        // Extract stock symbols
-        const symbolMatch = message.match(/\b([A-Z]{3,5})\b/);
-        if (symbolMatch) {
-          if (lowerMessage.includes('fiyat') || lowerMessage.includes('analiz')) {
-            toolsToUse.push('get_stock_price');
-            toolParams['get_stock_price'] = { symbol: symbolMatch[1] };
-          }
-          if (lowerMessage.includes('geçmiş') || lowerMessage.includes('grafik')) {
-            toolsToUse.push('get_stock_history');
-            toolParams['get_stock_history'] = { symbol: symbolMatch[1], period: '1M' };
+        if (targetPrice) {
+          for (const symbol of symbols) {
+            tools.push('create_price_alert');
+            params[`create_price_alert_${symbol}`] = { symbol, targetPrice, condition };
           }
         }
       }
+    } else {
+      tools.push('get_price_alerts');
+      params['get_price_alerts'] = {};
+    }
+  }
+  
+  // === GAINERS/LOSERS ===
+  else if (lowerMessage.includes('yükselen') || lowerMessage.includes('yukselen') || 
+           lowerMessage.includes('kazandıran') || lowerMessage.includes('kazandiran') ||
+           lowerMessage.includes('en çok')) {
+    tools.push('get_top_gainers');
+    params['get_top_gainers'] = { limit: 15 };
+    tools.push('scan_market');
+    params['scan_market'] = {};
+  }
+  else if (lowerMessage.includes('düşen') || lowerMessage.includes('dusen') || 
+           lowerMessage.includes('kaybettiren') || lowerMessage.includes('kaybeden')) {
+    tools.push('get_top_losers');
+    params['get_top_losers'] = { limit: 15 };
+    tools.push('scan_market');
+    params['scan_market'] = {};
+  }
+  
+  // === KAP DATA ===
+  else if (lowerMessage.includes('kap') || lowerMessage.includes('bildirim') || lowerMessage.includes('açıklama')) {
+    tools.push('get_kap_data');
+    params['get_kap_data'] = symbols.length > 0 ? { symbol: symbols[0] } : {};
+  }
+  
+  // === MARKET SCAN ===
+  else if (lowerMessage.includes('piyasa') || lowerMessage.includes('tara') || lowerMessage.includes('sektör') ||
+           lowerMessage.includes('bist') || lowerMessage.includes('borsa')) {
+    tools.push('scan_market');
+    params['scan_market'] = {};
+    tools.push('get_top_gainers');
+    params['get_top_gainers'] = { limit: 10 };
+    tools.push('get_top_losers');
+    params['get_top_losers'] = { limit: 10 };
+  }
+  
+  // === NEWS/SEARCH ===
+  else if (lowerMessage.includes('haber') || lowerMessage.includes('ara') || lowerMessage.includes('son')) {
+    tools.push('web_search');
+    params['web_search'] = { query: message };
+    if (symbols.length > 0) {
+      tools.push('get_kap_data');
+      params['get_kap_data'] = { symbol: symbols[0] };
+    }
+  }
+  
+  // === SPECIFIC STOCK QUERY (fallback) ===
+  else if (symbols.length > 0) {
+    for (const symbol of symbols) {
+      tools.push('get_stock_price');
+      params[`get_stock_price_${symbol}`] = { symbol };
+    }
+  }
+  
+  // === GENERAL QUERY ===
+  else {
+    tools.push('scan_market');
+    params['scan_market'] = {};
+  }
+  
+  return { tools: [...new Set(tools)], params };
+}
+
+// AI Agent Handler
+export async function POST(request: NextRequest) {
+  try {
+    // Get current user
+    const userId = await getCurrentUserId();
+    
+    const body = await request.json();
+    const { 
+      message, 
+      conversationHistory = [],
+      txtContent,      // TXT file content
+      txtFilename,     // TXT filename
+      imageBase64,     // Image for VLM analysis
+      imageSymbol,     // Stock symbol for image analysis
+    } = body;
+
+    if (!message && !txtContent && !imageBase64) {
+      return NextResponse.json({ success: false, error: 'Mesaj, dosya veya resim gerekli' }, { status: 400 });
     }
 
-    // Execute tools
+    console.log('📥 User message:', message);
+
+    // Handle TXT file upload
+    if (txtContent) {
+      console.log('📄 TXT file uploaded:', txtFilename);
+      const result = await readTxtFile(txtContent, txtFilename);
+      
+      return NextResponse.json({
+        success: true,
+        response: result.success ? result.analysis : `Hata: ${result.error}`,
+        toolsUsed: ['read_txt_file'],
+        toolResults: { read_txt_file: result },
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Handle image analysis
+    if (imageBase64) {
+      console.log('🖼️ Image uploaded for analysis');
+      const result = await analyzeChartImage(imageBase64, imageSymbol);
+      
+      return NextResponse.json({
+        success: true,
+        response: result.success ? result.analysis : `Hata: ${result.error}`,
+        toolsUsed: ['analyze_chart_image'],
+        toolResults: { analyze_chart_image: result },
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Intelligent tool selection
+    const { tools, params } = selectToolsForQuery(message);
+    
+    console.log('🔧 Selected tools:', tools);
+    console.log('📋 Tool params:', params);
+
+    // Execute tools in parallel
     const toolResults: Record<string, unknown> = {};
-    for (const tool of toolsToUse) {
-      const params = toolParams[tool] || {};
-      console.log(`Executing tool: ${tool} with params:`, params);
-      toolResults[tool] = await executeTool(tool, params);
+    const executionPromises = tools.map(async (tool) => {
+      const toolParams = params[tool] || params[Object.keys(params).find(k => k.startsWith(tool))] || {};
+      const result = await executeTool(tool, toolParams, userId);
+      return { tool, result };
+    });
+
+    const results = await Promise.all(executionPromises);
+    for (const { tool, result } of results) {
+      toolResults[tool] = result;
     }
 
-    // Generate final response
-    const finalSystemPrompt = `Sen BIST 100 hisse analizi yapan bir AI asistanısın. Türkçe yanıt ver.
-Kullanıcıya hem nazik hem de bilgilendirici bir şekilde yanıt ver.
-Tool sonuçlarını kullanarak detaylı bir analiz sun.
-Emojiler kullan ama abartma.
-Yatırım tavsiyesi vermeyi, sadece analiz yap.`;
+    // Generate AI response
+    const systemPrompt = `Sen profesyonel bir BIST hisse analiz asistanısın. Türkçe yanıt ver.
+
+KURALLAR:
+1. Tool sonuçlarını kullanarak KAPSAMLI ve DETAYLI bir analiz yap
+2. Sayısal verileri kullan (fiyat, değişim, hacim, teknik göstergeler)
+3. Risk faktörlerini belirt
+4. Yatırım TAVSİYESİ VERME, sadece ANALİZ yap
+5. Emoji kullan ama abartma
+6. Sonuçları MADDE MADDE sun
+
+YANIT YAPISI:
+📊 **Özet**
+📈 **Teknik Analiz** (varsa)
+📰 **Haberler/KAP** (varsa)
+⚠️ **Risk Değerlendirmesi**
+💡 **Sonuç**`;
 
     const finalResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
@@ -498,41 +823,51 @@ Yatırım tavsiyesi vermeyi, sadece analiz yap.`;
       body: JSON.stringify({
         model: 'llama-3.3-70b-versatile',
         messages: [
-          { role: 'system', content: finalSystemPrompt },
-          ...conversationHistory.map((m: { role: string; content: string }) => ({
+          { role: 'system', content: systemPrompt },
+          ...conversationHistory.slice(-6).map((m: { role: string; content: string }) => ({
             role: m.role,
             content: m.content,
           })),
           { 
             role: 'user', 
-            content: `Kullanıcı Sorusu: ${message}\n\nKullanılan Araçlar: ${toolsToUse.join(', ')}\n\nAraç Sonuçları:\n${JSON.stringify(toolResults, null, 2)}` 
+            content: `Kullanıcı Sorusu: "${message}"
+
+Kullanılan Araçlar: ${tools.join(', ')}
+
+Araç Sonuçları:
+${JSON.stringify(toolResults, null, 2)}
+
+Bu verileri kullanarak kullanıcının sorusuna kapsamlı bir yanıt ver.` 
           },
         ],
         temperature: 0.7,
-        max_tokens: 2000,
+        max_tokens: 2500,
       }),
     });
 
-    let responseText = 'İşlem tamamlandı.';
+    let responseText = '';
     
     if (finalResponse.ok) {
       const finalData = await finalResponse.json();
-      responseText = finalData.choices?.[0]?.message?.content || responseText;
+      responseText = finalData.choices?.[0]?.message?.content || '';
     } else {
-      // Fallback response with tool results
-      responseText = `## İşlem Sonuçları\n\n`;
-      responseText += `**Kullanılan Araçlar:** ${toolsToUse.join(', ')}\n\n`;
+      // Fallback response
+      responseText = `## 📊 İşlem Sonuçları\n\n`;
+      responseText += `**Kullanılan Araçlar:** ${tools.map(t => `🔧 ${t}`).join(', ')}\n\n`;
       
       for (const [tool, result] of Object.entries(toolResults)) {
-        responseText += `### ${tool}\n`;
-        responseText += '```json\n' + JSON.stringify(result, null, 2).slice(0, 500) + '\n```\n\n';
+        const r = result as { success: boolean; data?: unknown; error?: string };
+        if (r.success && r.data) {
+          responseText += `### ${tool}\n`;
+          responseText += '```\n' + JSON.stringify(r.data, null, 2).slice(0, 500) + '\n```\n\n';
+        }
       }
     }
 
     return NextResponse.json({
       success: true,
       response: responseText,
-      toolsUsed: toolsToUse,
+      toolsUsed: tools,
       toolResults,
       timestamp: new Date().toISOString(),
     });

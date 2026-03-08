@@ -10,6 +10,18 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model User {
+  id           String   @id @default(cuid())
+  rumuz        String   @unique  // Kullanıcı rumuzu (nickname)
+  avatar       String?           // Avatar rengi veya URL
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // İlişkiler
+  watchlist    WatchlistItem[]
+  alerts       PriceAlert[]
+}
+
 model WatchlistItem {
   id          String   @id @default(cuid())
   symbol      String   // Hisse kodu (ASELS, THYAO, vb.)
@@ -17,6 +29,10 @@ model WatchlistItem {
   targetPrice Float?   // Hedef fiyat (bildirim için)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  // User ilişkisi
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model PriceAlert {
@@ -27,4 +43,8 @@ model PriceAlert {
   active      Boolean  @default(true)
   triggered   Boolean  @default(false)
   createdAt   DateTime @default(now())
+
+  // User ilişkisi
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

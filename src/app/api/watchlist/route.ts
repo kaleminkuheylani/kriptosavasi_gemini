@@ -1,10 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { cookies } from 'next/headers';
+
+// Helper - Get current user
+async function getCurrentUser() {
+  const cookieStore = await cookies();
+  const userId = cookieStore.get('userId')?.value;
+  return userId;
+}
 
 // GET - Watchlist'i getir
 export async function GET() {
   try {
+    const userId = await getCurrentUser();
+    
     const watchlist = await db.watchlistItem.findMany({
+      where: userId ? { userId } : { userId: null },
       orderBy: {
         createdAt: 'desc',
       },
@@ -28,6 +39,7 @@ export async function GET() {
 // POST - Watchlist'e ekle
 export async function POST(request: NextRequest) {
   try {
+    const userId = await getCurrentUser();
     const body = await request.json();
     const { symbol, name, targetPrice } = body;
 
@@ -38,9 +50,12 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    // Zaten var mı kontrol et
+    // Zaten var mı kontrol et (kullanıcının kendi listesinde)
     const existing = await db.watchlistItem.findFirst({
-      where: { symbol: symbol.toUpperCase() },
+      where: { 
+        symbol: symbol.toUpperCase(),
+        userId: userId || null,
+      },
     });
 
     if (existing) {
@@ -56,6 +71,7 @@ export async function POST(request: NextRequest) {
         symbol: symbol.toUpperCase(),
         name,
         targetPrice: targetPrice ? parseFloat(targetPrice) : null,
+        userId: userId || null,
       },
     });
 
@@ -77,6 +93,7 @@ export async function POST(request: NextRequest) {
 // DELETE - Watchlist'ten kaldır
 export async function DELETE(request: NextRequest) {
   try {
+    const userId = await getCurrentUser();
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
     const symbol = searchParams.get('symbol');
@@ -94,7 +111,10 @@ export async function DELETE(request: NextRequest) {
       });
     } else if (symbol) {
       await db.watchlistItem.deleteMany({
-        where: { symbol: symbol.toUpperCase() },
+        where: { 
+          symbol: symbol.toUpperCase(),
+          userId: userId || null,
+        },
       });
     }
 
