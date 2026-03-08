@@ -75,6 +75,28 @@ const TOOLS = {
   },
 };
 
+// Tools that require explicit user confirmation before execution
+const CONFIRMATION_REQUIRED_TOOLS = ['add_to_watchlist', 'remove_from_watchlist', 'create_price_alert'];
+
+interface PendingAction {
+  tool: string;
+  params: Record<string, unknown>;
+  description: string;
+}
+
+function describePendingAction(tool: string, params: Record<string, unknown>): string {
+  switch (tool) {
+    case 'add_to_watchlist':
+      return `**${params.symbol}** hissesini takip listesine ekle`;
+    case 'remove_from_watchlist':
+      return `**${params.symbol}** hissesini takip listesinden çıkar`;
+    case 'create_price_alert':
+      return `**${params.symbol}** için ${params.targetPrice} TL ${params.condition === 'above' ? 'üzerine çıkınca' : 'altına inince'} bildirim oluştur`;
+    default:
+      return tool;
+  }
+}
+
 // Stock price cache
 const stockPriceCache: Record<string, { data: unknown; timestamp: number }> = {};
 const CACHE_TTL = 60000; // 1 minute
@@ -1076,18 +1098,51 @@ export async function POST(request: NextRequest) {
     const userId = await getCurrentUserId();
     
     const body = await request.json();
-    const { 
-      message, 
+    const {
+      message,
       conversationHistory = [],
-      txtContent,      // TXT file content
-      txtFilename,     // TXT filename
-      imageBase64,     // Image for VLM analysis
-      imageSymbol,     // Stock symbol for image analysis
+      txtContent,
+      txtFilename,
+      imageBase64,
+      imageSymbol,
+      confirmActions,   // PendingAction[] — user approved these actions
     } = body;
 
-    if (!message && !txtContent && !imageBase64) {
+    if (!message && !txtContent && !imageBase64 && !confirmActions) {
       return NextResponse.json({ success: false, error: 'Mesaj, dosya veya resim gerekli' }, { status: 400 });
     }
+
+    // ── Confirmed actions path ────────────────────────────────────────────
+    if (confirmActions && Array.isArray(confirmActions) && confirmActions.length > 0) {
+      console.log('✅ Confirmed actions:', confirmActions.map((a: PendingAction) => a.tool));
+      const toolResults: Record<string, unknown> = {};
+
+      for (const action of confirmActions as PendingAction[]) {
+        const result = await executeTool(action.tool, action.params, userId);
+        toolResults[action.tool] = result;
+      }
+
+      const successList = (confirmActions as PendingAction[])
+        .map(a => `• ${a.description}`)
+        .join('\n');
+
+      const responseText = `✅ **İşlemler tamamlandı:**\n${successList}`;
+
+      if ((confirmActions as PendingAction[]).some(a =>
+        a.tool.includes('watchlist') || a.tool.includes('alert')
+      )) {
+        // Signal frontend to refresh watchlist/alerts
+      }
+
+      return NextResponse.json({
+        success: true,
+        response: responseText,
+        toolsUsed: (confirmActions as PendingAction[]).map(a => a.tool),
+        toolResults,
+        timestamp: new Date().toISOString(),
+      });
+    }
+    // ─────────────────────────────────────────────────────────────────────
 
     console.log('📥 User message:', message);
 
@@ -1121,14 +1176,27 @@ export async function POST(request: NextRequest) {
 
     // Intelligent tool selection
     const { tools, params } = selectToolsForQuery(message);
-    
-    console.log('🔧 Selected tools:', tools);
-    console.log('📋 Tool params:', params);
 
-    // Execute tools in parallel
+    // Separate immediate tools from those requiring user confirmation
+    const immediateTools = tools.filter(t => !CONFIRMATION_REQUIRED_TOOLS.includes(t));
+    const pendingActions: PendingAction[] = tools
+      .filter(t => CONFIRMATION_REQUIRED_TOOLS.includes(t))
+      .map(t => ({
+        tool: t,
+        params: params[t] || params[Object.keys(params).find(k => k.startsWith(t)) ?? ''] || {},
+        description: describePendingAction(
+          t,
+          params[t] || params[Object.keys(params).find(k => k.startsWith(t)) ?? ''] || {}
+        ),
+      }));
+
+    console.log('🔧 Immediate tools:', immediateTools);
+    console.log('⏳ Pending (needs confirmation):', pendingActions.map(a => a.tool));
+
+    // Execute only immediate tools in parallel
     const toolResults: Record<string, unknown> = {};
-    const executionPromises = tools.map(async (tool) => {
-      const toolParams = params[tool] || params[Object.keys(params).find(k => k.startsWith(tool))] || {};
+    const executionPromises = immediateTools.map(async (tool) => {
+      const toolParams = params[tool] || params[Object.keys(params).find(k => k.startsWith(tool)) ?? ''] || {};
       const result = await executeTool(tool, toolParams, userId);
       return { tool, result };
     });
@@ -1139,6 +1207,10 @@ export async function POST(request: NextRequest) {
     }
 
     // Generate AI response
+    const pendingSection = pendingActions.length > 0
+      ? `\n\nBEKLEYEN İŞLEMLER (kullanıcı onayı gerekli):\n${pendingActions.map(a => `- ${a.description}`).join('\n')}\nYanıtında bu işlemleri önerecek veya onay isteyecek şekilde belirt.`
+      : '';
+
     const systemPrompt = `Sen profesyonel bir BIST hisse analiz asistanısın. Türkçe yanıt ver.
 
 KURALLAR:
@@ -1154,7 +1226,7 @@ YANIT YAPISI:
 📈 **Teknik Analiz** (varsa)
 📰 **Haberler/KAP** (varsa)
 ⚠️ **Risk Değerlendirmesi**
-💡 **Sonuç**`;
+💡 **Sonuç**${pendingSection}`;
 
     const finalResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
@@ -1174,7 +1246,7 @@ YANIT YAPISI:
             role: 'user',
             content: `Kullanıcı Sorusu: "${message}"
 
-Kullanılan Araçlar: ${tools.join(', ')}
+Kullanılan Araçlar: ${immediateTools.join(', ')}
 
 Araç Sonuçları:
 ${buildToolResultsText(toolResults)}
@@ -1188,15 +1260,14 @@ Bu verileri kullanarak kullanıcının sorusuna kapsamlı bir yanıt ver.`
     });
 
     let responseText = '';
-    
+
     if (finalResponse.ok) {
       const finalData = await finalResponse.json();
       responseText = finalData.choices?.[0]?.message?.content || '';
     } else {
-      // Fallback response
       responseText = `## 📊 İşlem Sonuçları\n\n`;
-      responseText += `**Kullanılan Araçlar:** ${tools.map(t => `🔧 ${t}`).join(', ')}\n\n`;
-      
+      responseText += `**Kullanılan Araçlar:** ${immediateTools.map(t => `🔧 ${t}`).join(', ')}\n\n`;
+
       for (const [tool, result] of Object.entries(toolResults)) {
         const r = result as { success: boolean; data?: unknown; error?: string };
         if (r.success && r.data) {
@@ -1209,8 +1280,9 @@ Bu verileri kullanarak kullanıcının sorusuna kapsamlı bir yanıt ver.`
     return NextResponse.json({
       success: true,
       response: responseText,
-      toolsUsed: tools,
+      toolsUsed: immediateTools,
       toolResults,
+      pendingActions: pendingActions.length > 0 ? pendingActions : undefined,
       timestamp: new Date().toISOString(),
     });
 

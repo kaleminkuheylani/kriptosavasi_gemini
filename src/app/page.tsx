@@ -100,10 +100,17 @@ interface HistoricalData {
   volume: number;
 }
 
+interface PendingAction {
+  tool: string;
+  params: Record<string, unknown>;
+  description: string;
+}
+
 interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   toolsUsed?: string[];
+  pendingActions?: PendingAction[];
   timestamp: Date;
 }
 
@@ -420,10 +427,11 @@ export default function Home() {
           role: 'assistant',
           content: data.response,
           toolsUsed: data.toolsUsed,
+          pendingActions: data.pendingActions,
           timestamp: new Date(),
         }]);
         setLastToolsUsed(data.toolsUsed || []);
-        
+
         if (data.toolsUsed?.some((t: string) => t.includes('watchlist') || t.includes('alert'))) {
           fetchWatchlist();
           fetchAlerts();
@@ -444,6 +452,65 @@ export default function Home() {
     } finally {
       setChatLoading(false);
     }
+  };
+
+  // Confirm pending actions
+  const confirmPendingActions = async (actions: PendingAction[], msgIdx: number) => {
+    // Disable pending on the message
+    setChatMessages(prev => prev.map((m, i) =>
+      i === msgIdx ? { ...m, pendingActions: undefined } : m
+    ));
+    setChatMessages(prev => [...prev, {
+      role: 'user',
+      content: '✅ Onayla',
+      timestamp: new Date(),
+    }]);
+    setChatLoading(true);
+
+    try {
+      const response = await fetch('/api/agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmActions: actions }),
+      });
+      const data = await response.json();
+
+      setChatMessages(prev => [...prev, {
+        role: 'assistant',
+        content: data.success ? data.response : 'İşlem sırasında hata oluştu.',
+        toolsUsed: data.toolsUsed,
+        timestamp: new Date(),
+      }]);
+
+      if (data.toolsUsed?.some((t: string) => t.includes('watchlist') || t.includes('alert'))) {
+        fetchWatchlist();
+        fetchAlerts();
+      }
+    } catch {
+      setChatMessages(prev => [...prev, {
+        role: 'assistant',
+        content: 'Bağlantı hatası. Lütfen tekrar deneyin.',
+        timestamp: new Date(),
+      }]);
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
+  // Cancel pending actions
+  const cancelPendingActions = (msgIdx: number) => {
+    setChatMessages(prev => prev.map((m, i) =>
+      i === msgIdx ? { ...m, pendingActions: undefined } : m
+    ));
+    setChatMessages(prev => [...prev, {
+      role: 'user',
+      content: '❌ İptal',
+      timestamp: new Date(),
+    }, {
+      role: 'assistant',
+      content: 'İşlem iptal edildi.',
+      timestamp: new Date(),
+    }]);
   };
 
   // TXT File Upload Handler
@@ -1525,6 +1592,40 @@ export default function Home() {
                             </Badge>
                           );
                         })}
+                      </div>
+                    )}
+                    {msg.pendingActions && msg.pendingActions.length > 0 && (
+                      <div className="mt-3 pt-3 border-t border-slate-700 space-y-2">
+                        <p className="text-xs text-slate-400 font-medium">🔐 Onay Bekleniyor:</p>
+                        {msg.pendingActions.map((action, aIdx) => (
+                          <div key={aIdx} className="flex items-center gap-2 text-xs bg-slate-700/50 rounded-lg px-3 py-2">
+                            {action.tool === 'add_to_watchlist' && <Star className="h-3.5 w-3.5 text-yellow-400 shrink-0" />}
+                            {action.tool === 'remove_from_watchlist' && <Trash2 className="h-3.5 w-3.5 text-red-400 shrink-0" />}
+                            {action.tool === 'create_price_alert' && <Bell className="h-3.5 w-3.5 text-amber-400 shrink-0" />}
+                            <span className="text-slate-300 flex-1">{action.description}</span>
+                          </div>
+                        ))}
+                        <div className="flex gap-2 mt-2">
+                          <Button
+                            size="sm"
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-7 px-3"
+                            onClick={() => confirmPendingActions(msg.pendingActions!, idx)}
+                            disabled={chatLoading}
+                          >
+                            <Plus className="h-3 w-3 mr-1" />
+                            Onayla
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="border-slate-600 text-slate-400 hover:text-white text-xs h-7 px-3"
+                            onClick={() => cancelPendingActions(idx)}
+                            disabled={chatLoading}
+                          >
+                            <X className="h-3 w-3 mr-1" />
+                            İptal
+                          </Button>
+                        </div>
                       </div>
                     )}
                   </div>
