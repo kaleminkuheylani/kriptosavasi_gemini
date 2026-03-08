@@ -8,8 +8,7 @@ import Layout from './components/Layout';
 import Markets from './components/Markets';
 import Kripto from './components/Market';
 import News from './components/News';
-import Doviz from './components/Doviz';
-import Altin from './components/Altin';
+import Varliklar from './components/Varliklar';
 import Borsa from './components/Borsa';
 
 export default function App() {
@@ -20,12 +19,10 @@ export default function App() {
     switch (activeTab) {
       case 'markets':
         return <Markets searchQuery={searchQuery} />;
+      case 'varliklar':
+        return <Varliklar searchQuery={searchQuery} />;
       case 'kripto':
         return <Kripto searchQuery={searchQuery} />;
-      case 'doviz':
-        return <Doviz searchQuery={searchQuery} />;
-      case 'altin':
-        return <Altin searchQuery={searchQuery} />;
       case 'borsa':
         return <Borsa searchQuery={searchQuery} />;
       case 'news':
