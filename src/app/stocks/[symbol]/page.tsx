@@ -9,12 +9,14 @@ import {
   ArrowUpRight,
   ExternalLink,
   Loader2,
+  MessageSquare,
   Newspaper,
   RefreshCw,
   Star,
   StarOff,
   TrendingDown,
   TrendingUp,
+  Trash2,
 } from 'lucide-react';
 import {
   Bar,
@@ -31,6 +33,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
+import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
 
 type Timeframe = '1M' | '3M' | '6M' | '1Y' | '3Y' | '5Y';
@@ -86,6 +89,25 @@ interface RelatedNewsItem {
 interface RelatedNewsApiResponse {
   success: boolean;
   data: RelatedNewsItem[];
+}
+
+interface CurrentUser {
+  id: string;
+  rumuz: string;
+}
+
+interface StockComment {
+  id: string;
+  symbol: string;
+  userId: string;
+  authorName: string;
+  content: string;
+  createdAt: string;
+}
+
+interface StockCommentsApiResponse {
+  success: boolean;
+  data: StockComment[];
 }
 
 function formatNumber(value: number, fractionDigits = 2): string {
@@ -153,6 +175,11 @@ export default function StockDetailPage() {
   const [watchlistLoading, setWatchlistLoading] = useState(false);
   const [relatedNews, setRelatedNews] = useState<RelatedNewsItem[]>([]);
   const [newsLoading, setNewsLoading] = useState(false);
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [comments, setComments] = useState<StockComment[]>([]);
+  const [commentsLoading, setCommentsLoading] = useState(false);
+  const [commentInput, setCommentInput] = useState('');
+  const [commentSubmitting, setCommentSubmitting] = useState(false);
 
   const fetchWatchlist = useCallback(async () => {
     try {
@@ -192,6 +219,38 @@ export default function StockDetailPage() {
       setRelatedNews([]);
     } finally {
       setNewsLoading(false);
+    }
+  }, [symbol]);
+
+  const fetchCurrentUser = useCallback(async () => {
+    try {
+      const response = await fetch('/api/auth');
+      const data = await response.json();
+      if (data.success && data.user) {
+        setCurrentUser({ id: data.user.id, rumuz: data.user.rumuz });
+      } else {
+        setCurrentUser(null);
+      }
+    } catch {
+      setCurrentUser(null);
+    }
+  }, []);
+
+  const fetchComments = useCallback(async () => {
+    if (!symbol) return;
+    setCommentsLoading(true);
+    try {
+      const response = await fetch(`/api/stocks/${encodeURIComponent(symbol)}/comments?limit=50`);
+      const data: StockCommentsApiResponse = await response.json();
+      if (data.success) {
+        setComments(data.data ?? []);
+      } else {
+        setComments([]);
+      }
+    } catch {
+      setComments([]);
+    } finally {
+      setCommentsLoading(false);
     }
   }, [symbol]);
 
@@ -242,6 +301,11 @@ export default function StockDetailPage() {
   useEffect(() => {
     fetchRelatedNews();
   }, [fetchRelatedNews]);
+
+  useEffect(() => {
+    fetchCurrentUser();
+    fetchComments();
+  }, [fetchComments, fetchCurrentUser]);
 
   const isInWatchlist = useMemo(
     () => watchlist.some(item => item.symbol.toUpperCase() === symbol),
@@ -307,6 +371,71 @@ export default function StockDetailPage() {
     }
   };
 
+  const handleSubmitComment = async () => {
+    if (!currentUser) {
+      toast({
+        title: 'Giris gerekli',
+        description: 'Yorum yapabilmek icin once giris yapmalisiniz',
+        variant: 'destructive',
+      });
+      return;
+    }
+    const trimmed = commentInput.trim();
+    if (trimmed.length < 2) {
+      toast({
+        title: 'Yorum kisa',
+        description: 'Yorum en az 2 karakter olmali',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setCommentSubmitting(true);
+    try {
+      const response = await fetch(`/api/stocks/${encodeURIComponent(symbol)}/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: trimmed }),
+      });
+      const data = await response.json();
+      if (!data.success) {
+        throw new Error(data.error || 'Yorum eklenemedi');
+      }
+      setComments(prev => [data.data as StockComment, ...prev]);
+      setCommentInput('');
+      toast({ title: 'Yorum eklendi' });
+    } catch (error) {
+      toast({
+        title: 'Hata',
+        description: error instanceof Error ? error.message : 'Yorum eklenemedi',
+        variant: 'destructive',
+      });
+    } finally {
+      setCommentSubmitting(false);
+    }
+  };
+
+  const handleDeleteComment = async (commentId: string) => {
+    try {
+      const response = await fetch(
+        `/api/stocks/${encodeURIComponent(symbol)}/comments?id=${encodeURIComponent(commentId)}`,
+        { method: 'DELETE' }
+      );
+      const data = await response.json();
+      if (!data.success) {
+        throw new Error(data.error || 'Yorum silinemedi');
+      }
+      setComments(prev => prev.filter(item => item.id !== commentId));
+      toast({ title: 'Yorum silindi' });
+    } catch (error) {
+      toast({
+        title: 'Hata',
+        description: error instanceof Error ? error.message : 'Yorum silinemedi',
+        variant: 'destructive',
+      });
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-950 text-white">
@@ -362,6 +491,7 @@ export default function StockDetailPage() {
               onClick={() => {
                 fetchDetail(timeframe);
                 fetchRelatedNews();
+                fetchComments();
               }}
               disabled={refreshing}
             >
@@ -676,6 +806,85 @@ export default function StockDetailPage() {
             ) : (
               <p className="py-8 text-center text-sm text-slate-500">
                 Bu hisse icin su an listelenecek haber bulunamadi.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="border-slate-800 bg-slate-900">
+          <CardHeader className="flex flex-row items-center justify-between gap-2">
+            <CardTitle className="flex items-center gap-2">
+              <MessageSquare className="h-5 w-5 text-emerald-400" />
+              Yorumlar
+            </CardTitle>
+            <Badge variant="secondary" className="bg-slate-800 text-slate-300">
+              {comments.length} yorum
+            </Badge>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2 rounded-lg border border-slate-800 bg-slate-800/30 p-3">
+              <Textarea
+                value={commentInput}
+                onChange={e => setCommentInput(e.target.value)}
+                placeholder={
+                  currentUser
+                    ? `${symbol} hakkinda gorusunuzu yazin...`
+                    : 'Yorum yazmak icin once giris yapin'
+                }
+                className="min-h-[90px] border-slate-700 bg-slate-900 text-white placeholder:text-slate-500"
+                disabled={!currentUser || commentSubmitting}
+              />
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-slate-500">
+                  {currentUser
+                    ? `Yazan: @${currentUser.rumuz}`
+                    : 'Giris icin ana sayfadan kullanici ikonuna tiklayabilirsiniz'}
+                </p>
+                <Button
+                  size="sm"
+                  className="bg-emerald-600 hover:bg-emerald-700"
+                  disabled={!currentUser || commentSubmitting || commentInput.trim().length < 2}
+                  onClick={handleSubmitComment}
+                >
+                  {commentSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  Yorum Gonder
+                </Button>
+              </div>
+            </div>
+
+            {commentsLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-5 w-5 animate-spin text-emerald-400" />
+                <span className="ml-2 text-sm text-slate-400">Yorumlar yukleniyor...</span>
+              </div>
+            ) : comments.length > 0 ? (
+              <div className="space-y-2">
+                {comments.map(item => (
+                  <div key={item.id} className="rounded-lg border border-slate-800 bg-slate-800/25 p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-medium text-white">@{item.authorName}</p>
+                        <p className="text-xs text-slate-500">{formatNewsDate(item.createdAt)}</p>
+                      </div>
+                      {currentUser?.id === item.userId ? (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-slate-500 hover:text-red-400"
+                          onClick={() => handleDeleteComment(item.id)}
+                          title="Yorumu sil"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      ) : null}
+                    </div>
+                    <p className="mt-2 whitespace-pre-wrap text-sm text-slate-200">{item.content}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="py-6 text-center text-sm text-slate-500">
+                Bu hisse icin henuz yorum yok. Ilk yorumu siz yapin.
               </p>
             )}
           </CardContent>
