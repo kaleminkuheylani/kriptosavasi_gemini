@@ -7,7 +7,9 @@ import {
   ArrowDownRight,
   ArrowLeft,
   ArrowUpRight,
+  ExternalLink,
   Loader2,
+  Newspaper,
   RefreshCw,
   Star,
   StarOff,
@@ -74,10 +76,34 @@ interface WatchlistItem {
   symbol: string;
 }
 
+interface RelatedNewsItem {
+  title: string;
+  link: string;
+  publishedAt: string;
+  source: string;
+}
+
+interface RelatedNewsApiResponse {
+  success: boolean;
+  data: RelatedNewsItem[];
+}
+
 function formatNumber(value: number, fractionDigits = 2): string {
   return value.toLocaleString('tr-TR', {
     minimumFractionDigits: fractionDigits,
     maximumFractionDigits: fractionDigits,
+  });
+}
+
+function formatNewsDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('tr-TR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
   });
 }
 
@@ -125,6 +151,8 @@ export default function StockDetailPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
   const [watchlistLoading, setWatchlistLoading] = useState(false);
+  const [relatedNews, setRelatedNews] = useState<RelatedNewsItem[]>([]);
+  const [newsLoading, setNewsLoading] = useState(false);
 
   const fetchWatchlist = useCallback(async () => {
     try {
@@ -146,6 +174,24 @@ export default function StockDetailPage() {
       return data.data.find(item => item.code === symbol) ?? null;
     } catch {
       return null;
+    }
+  }, [symbol]);
+
+  const fetchRelatedNews = useCallback(async () => {
+    if (!symbol) return;
+    setNewsLoading(true);
+    try {
+      const response = await fetch(`/api/stocks/${encodeURIComponent(symbol)}/news?limit=8`);
+      const data: RelatedNewsApiResponse = await response.json();
+      if (data.success) {
+        setRelatedNews(data.data ?? []);
+      } else {
+        setRelatedNews([]);
+      }
+    } catch {
+      setRelatedNews([]);
+    } finally {
+      setNewsLoading(false);
     }
   }, [symbol]);
 
@@ -192,6 +238,10 @@ export default function StockDetailPage() {
   useEffect(() => {
     fetchWatchlist();
   }, [fetchWatchlist]);
+
+  useEffect(() => {
+    fetchRelatedNews();
+  }, [fetchRelatedNews]);
 
   const isInWatchlist = useMemo(
     () => watchlist.some(item => item.symbol.toUpperCase() === symbol),
@@ -309,7 +359,10 @@ export default function StockDetailPage() {
             <Button
               variant="outline"
               className="border-slate-700 text-slate-300"
-              onClick={() => fetchDetail(timeframe)}
+              onClick={() => {
+                fetchDetail(timeframe);
+                fetchRelatedNews();
+              }}
               disabled={refreshing}
             >
               <RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
@@ -572,6 +625,61 @@ export default function StockDetailPage() {
             </CardContent>
           </Card>
         </div>
+
+        <Card className="border-slate-800 bg-slate-900">
+          <CardHeader className="flex flex-row items-center justify-between gap-2">
+            <CardTitle className="flex items-center gap-2">
+              <Newspaper className="h-5 w-5 text-cyan-400" />
+              Ilgili Haberler
+            </CardTitle>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-slate-400 hover:text-white"
+              onClick={fetchRelatedNews}
+              disabled={newsLoading}
+            >
+              <RefreshCw className={`mr-2 h-4 w-4 ${newsLoading ? 'animate-spin' : ''}`} />
+              Yenile
+            </Button>
+          </CardHeader>
+          <CardContent>
+            {newsLoading ? (
+              <div className="flex items-center justify-center py-10">
+                <Loader2 className="h-6 w-6 animate-spin text-cyan-400" />
+                <span className="ml-2 text-sm text-slate-400">Haberler yukleniyor...</span>
+              </div>
+            ) : relatedNews.length > 0 ? (
+              <div className="space-y-2">
+                {relatedNews.map((newsItem, index) => (
+                  <a
+                    key={`${newsItem.link}-${index}`}
+                    href={newsItem.link}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="block rounded-lg border border-slate-800 bg-slate-800/30 p-3 transition-colors hover:bg-slate-800/60"
+                  >
+                    <p className="line-clamp-2 text-sm font-medium text-white">{newsItem.title}</p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                      <Badge variant="secondary" className="bg-slate-700 text-slate-300">
+                        {newsItem.source}
+                      </Badge>
+                      <span>{formatNewsDate(newsItem.publishedAt)}</span>
+                      <span className="inline-flex items-center gap-1 text-cyan-400">
+                        Habere git
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </span>
+                    </div>
+                  </a>
+                ))}
+              </div>
+            ) : (
+              <p className="py-8 text-center text-sm text-slate-500">
+                Bu hisse icin su an listelenecek haber bulunamadi.
+              </p>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
