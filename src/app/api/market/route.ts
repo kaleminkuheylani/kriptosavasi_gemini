@@ -93,9 +93,11 @@ const STOCK_SECTORS: Record<string, string> = {
 };
 
 // Use stocks API instead of duplicating fetch logic
-async function fetchAllStocks(): Promise<StockData[]> {
+async function fetchAllStocks(request: NextRequest): Promise<StockData[]> {
   try {
-    const response = await fetch('http://localhost:3000/api/stocks');
+    const host = request.headers.get('host') || 'localhost:3000';
+    const protocol = host.startsWith('localhost') ? 'http' : 'https';
+    const response = await fetch(`${protocol}://${host}/api/stocks`);
     const data = await response.json();
     if (data.success && Array.isArray(data.data)) {
       return data.data.map((s: StockData) => ({
@@ -115,7 +117,7 @@ export async function GET(request: NextRequest) {
   const type = searchParams.get('type');
   const symbol = searchParams.get('symbol'); // For similar stocks
   
-  const stocks = await fetchAllStocks();
+  const stocks = await fetchAllStocks(request);
   
   // Get gainers
   if (type === 'gainers') {
