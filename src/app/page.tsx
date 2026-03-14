@@ -147,12 +147,16 @@ const TOOLS = [
 // Tab definitions
 const TABS = [
   { id: 'dashboard', label: 'Ana Sayfa', icon: LayoutDashboard },
-  { id: 'stocks', label: 'Hisseler', icon: Database },
+  { id: 'market', label: 'Market', icon: Database },
   { id: 'watchlist', label: 'Takip Listem', icon: Star },
+  { id: 'alerts', label: 'Bildirimler', icon: Bell },
+];
+
+const MARKET_SUB_TABS = [
+  { id: 'stocks', label: 'Tum Hisseler', icon: Database },
   { id: 'gainers', label: 'Kazananlar', icon: TrendingUp },
   { id: 'losers', label: 'Kaybedenler', icon: TrendingDown },
   { id: 'active', label: 'En Aktifler', icon: Activity },
-  { id: 'alerts', label: 'Bildirimler', icon: Bell },
 ];
 
 export default function Home() {
@@ -167,6 +171,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [marketSubTab, setMarketSubTab] = useState('stocks');
   
   // Market Summary
   const [marketSummary, setMarketSummary] = useState<{
@@ -901,7 +906,7 @@ export default function Home() {
                   onChange={(e) => {
                     setSearchQuery(e.target.value);
                     if (e.target.value.trim()) {
-                      setActiveTab('stocks');
+                      setActiveTab('market');
                     }
                   }}
                   className="pl-12 h-14 text-base bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 focus-visible:ring-emerald-500 focus-visible:border-emerald-500"
@@ -1059,7 +1064,7 @@ export default function Home() {
                     title="En Cok Kazandiranlar" 
                     icon={TrendingUp} 
                     color="text-emerald-400"
-                    onSeeAll={() => setActiveTab('gainers')}
+                    onSeeAll={() => { setActiveTab('market'); setMarketSubTab('gainers'); }}
                   >
                     {[...stocks].sort((a, b) => b.changePercent - a.changePercent).slice(0, 5).map((stock) => (
                       <StockCard key={stock.code} stock={stock} />
@@ -1071,7 +1076,7 @@ export default function Home() {
                     title="En Cok Kaybettirenler" 
                     icon={TrendingDown} 
                     color="text-red-400"
-                    onSeeAll={() => setActiveTab('losers')}
+                    onSeeAll={() => { setActiveTab('market'); setMarketSubTab('losers'); }}
                   >
                     {[...stocks].sort((a, b) => a.changePercent - b.changePercent).slice(0, 5).map((stock) => (
                       <StockCard key={stock.code} stock={stock} />
@@ -1150,7 +1155,7 @@ export default function Home() {
                         key={sector.name}
                         onClick={() => {
                           setSearchQuery(sector.name);
-                          setActiveTab('stocks');
+                          setActiveTab('market');
                         }}
                         className="flex flex-col items-center gap-2 p-4 rounded-lg bg-slate-800/50 hover:bg-slate-800 transition-colors"
                       >
@@ -1170,19 +1175,138 @@ export default function Home() {
             )}
 
             {/* Stocks Tab */}
-            {activeTab === 'stocks' && (
+            {/* Market Tab - sub-tabs icinde: Tum Hisseler, Kazananlar, Kaybedenler, En Aktifler */}
+            {activeTab === 'market' && (
               <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
-                <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-                  <h3 className="font-semibold text-white">Tum Hisseler</h3>
-                  <Badge variant="secondary" className="bg-slate-800 text-slate-300">
-                    {filteredStocks.length} hisse
-                  </Badge>
+                {/* Sub-tab navigation */}
+                <div className="flex border-b border-slate-800 overflow-x-auto">
+                  {MARKET_SUB_TABS.map((sub) => {
+                    const Icon = sub.icon;
+                    return (
+                      <button
+                        key={sub.id}
+                        onClick={() => setMarketSubTab(sub.id)}
+                        className={`flex items-center gap-2 px-4 py-3 text-sm font-medium whitespace-nowrap transition-colors ${
+                          marketSubTab === sub.id
+                            ? 'text-white border-b-2 border-emerald-500 bg-slate-800/50'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <Icon className="h-4 w-4" />
+                        {sub.label}
+                        {sub.id === 'stocks' && (
+                          <span className="ml-1 text-xs bg-slate-700 text-slate-300 rounded px-1.5 py-0.5">
+                            {filteredStocks.length}
+                          </span>
+                        )}
+                        {sub.id === 'gainers' && (
+                          <span className="ml-1 text-xs bg-emerald-900/50 text-emerald-400 rounded px-1.5 py-0.5">
+                            {stocks.filter(s => s.changePercent > 0).length}
+                          </span>
+                        )}
+                        {sub.id === 'losers' && (
+                          <span className="ml-1 text-xs bg-red-900/50 text-red-400 rounded px-1.5 py-0.5">
+                            {stocks.filter(s => s.changePercent < 0).length}
+                          </span>
+                        )}
+                        {sub.id === 'active' && (
+                          <span className="ml-1 text-xs bg-blue-900/50 text-blue-400 rounded px-1.5 py-0.5">
+                            {activeStocks.length}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
                 </div>
-                <div className="max-h-[70vh] overflow-y-auto">
-                  {filteredStocks.map((stock) => (
-                    <StockCard key={stock.code} stock={stock} />
-                  ))}
-                </div>
+
+                {/* Tum Hisseler */}
+                {marketSubTab === 'stocks' && (
+                  <div className="max-h-[70vh] overflow-y-auto">
+                    {filteredStocks.map((stock) => (
+                      <StockCard key={stock.code} stock={stock} />
+                    ))}
+                  </div>
+                )}
+
+                {/* Kazananlar */}
+                {marketSubTab === 'gainers' && (
+                  <div className="max-h-[70vh] overflow-y-auto">
+                    {[...stocks]
+                      .filter(s => s.changePercent > 0)
+                      .sort((a, b) => b.changePercent - a.changePercent)
+                      .map((stock) => (
+                        <StockCard key={stock.code} stock={stock} />
+                      ))}
+                  </div>
+                )}
+
+                {/* Kaybedenler */}
+                {marketSubTab === 'losers' && (
+                  <div className="max-h-[70vh] overflow-y-auto">
+                    {[...stocks]
+                      .filter(s => s.changePercent < 0)
+                      .sort((a, b) => a.changePercent - b.changePercent)
+                      .map((stock) => (
+                        <StockCard key={stock.code} stock={stock} />
+                      ))}
+                  </div>
+                )}
+
+                {/* En Aktifler */}
+                {marketSubTab === 'active' && (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-slate-800 text-slate-400">
+                          <th className="text-left p-3 font-medium">Sembol</th>
+                          <th className="text-left p-3 font-medium hidden sm:table-cell">Sirket</th>
+                          <th className="text-right p-3 font-medium">Fiyat</th>
+                          <th className="text-right p-3 font-medium">Degisim</th>
+                          <th className="text-right p-3 font-medium">Hacim</th>
+                          <th className="text-left p-3 font-medium hidden md:table-cell">Sektor</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {activeStocks.map((s) => (
+                          <tr
+                            key={s.symbol}
+                            className="border-b border-slate-800 hover:bg-slate-800/50 cursor-pointer"
+                            onClick={() => {
+                              const stock = stocks.find(st => st.code === s.symbol);
+                              if (stock) openStockDetail(stock);
+                            }}
+                          >
+                            <td className="p-3">
+                              <span className="font-semibold text-white">{s.symbol}</span>
+                            </td>
+                            <td className="p-3 text-slate-400 hidden sm:table-cell text-xs">{s.name}</td>
+                            <td className="p-3 text-right text-white font-medium">
+                              {s.price.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </td>
+                            <td className={`p-3 text-right font-medium ${s.changePercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                              {s.changePercent >= 0 ? '+' : ''}{s.changePercent.toFixed(2)}%
+                            </td>
+                            <td className="p-3 text-right text-slate-300">
+                              {s.volume >= 1000000
+                                ? `${(s.volume / 1000000).toFixed(1)}M`
+                                : s.volume >= 1000
+                                  ? `${(s.volume / 1000).toFixed(0)}K`
+                                  : s.volume.toLocaleString('tr-TR')}
+                            </td>
+                            <td className="p-3 text-slate-400 text-xs hidden md:table-cell">{s.sector}</td>
+                          </tr>
+                        ))}
+                        {activeStocks.length === 0 && (
+                          <tr>
+                            <td colSpan={6} className="p-8 text-center text-slate-500">
+                              Veri yukleniyor...
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1214,7 +1338,7 @@ export default function Home() {
                     <Button 
                       variant="outline" 
                       className="mt-4 border-slate-700 text-slate-300"
-                      onClick={() => setActiveTab('stocks')}
+                      onClick={() => setActiveTab('market')}
                     >
                       Hisselere Goz At
                     </Button>
@@ -1223,109 +1347,6 @@ export default function Home() {
               </div>
             )}
 
-            {/* Kazananlar Tab */}
-            {activeTab === 'gainers' && (
-              <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
-                <div className="p-4 border-b border-slate-800">
-                  <h3 className="font-semibold text-white flex items-center gap-2">
-                    <TrendingUp className="h-5 w-5 text-emerald-400" />
-                    Gunun Kazananlari
-                  </h3>
-                </div>
-                <div className="max-h-[70vh] overflow-y-auto">
-                  {[...stocks]
-                    .filter(s => s.changePercent > 0)
-                    .sort((a, b) => b.changePercent - a.changePercent)
-                    .map((stock) => (
-                      <StockCard key={stock.code} stock={stock} />
-                    ))}
-                </div>
-              </div>
-            )}
-
-            {/* Kaybedenler Tab */}
-            {activeTab === 'losers' && (
-              <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
-                <div className="p-4 border-b border-slate-800">
-                  <h3 className="font-semibold text-white flex items-center gap-2">
-                    <TrendingDown className="h-5 w-5 text-red-400" />
-                    Gunun Kaybedenleri
-                  </h3>
-                </div>
-                <div className="max-h-[70vh] overflow-y-auto">
-                  {[...stocks]
-                    .filter(s => s.changePercent < 0)
-                    .sort((a, b) => a.changePercent - b.changePercent)
-                    .map((stock) => (
-                      <StockCard key={stock.code} stock={stock} />
-                    ))}
-                </div>
-              </div>
-            )}
-
-            {/* En Aktifler Tab */}
-            {activeTab === 'active' && (
-              <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
-                <div className="p-4 border-b border-slate-800">
-                  <h3 className="font-semibold text-white flex items-center gap-2">
-                    <Activity className="h-5 w-5 text-blue-400" />
-                    En Cok Islem Gorenler
-                  </h3>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-slate-800 text-slate-400">
-                        <th className="text-left p-3 font-medium">Sembol</th>
-                        <th className="text-left p-3 font-medium hidden sm:table-cell">Sirket</th>
-                        <th className="text-right p-3 font-medium">Fiyat</th>
-                        <th className="text-right p-3 font-medium">Degisim</th>
-                        <th className="text-right p-3 font-medium">Hacim</th>
-                        <th className="text-left p-3 font-medium hidden md:table-cell">Sektor</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {activeStocks.map((s) => (
-                        <tr
-                          key={s.symbol}
-                          className="border-b border-slate-800 hover:bg-slate-800/50 cursor-pointer"
-                          onClick={() => {
-                            const stock = stocks.find(st => st.code === s.symbol);
-                            if (stock) openStockDetail(stock);
-                          }}
-                        >
-                          <td className="p-3">
-                            <span className="font-semibold text-white">{s.symbol}</span>
-                          </td>
-                          <td className="p-3 text-slate-400 hidden sm:table-cell text-xs">{s.name}</td>
-                          <td className="p-3 text-right text-white font-medium">
-                            {s.price.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </td>
-                          <td className={`p-3 text-right font-medium ${s.changePercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                            {s.changePercent >= 0 ? '+' : ''}{s.changePercent.toFixed(2)}%
-                          </td>
-                          <td className="p-3 text-right text-slate-300">
-                            {s.volume >= 1000000
-                              ? `${(s.volume / 1000000).toFixed(1)}M`
-                              : s.volume >= 1000
-                                ? `${(s.volume / 1000).toFixed(0)}K`
-                                : s.volume.toLocaleString('tr-TR')}
-                          </td>
-                          <td className="p-3 text-slate-400 text-xs hidden md:table-cell">{s.sector}</td>
-                        </tr>
-                      ))}
-                      {activeStocks.length === 0 && (
-                        <tr>
-                          <td colSpan={6} className="p-8 text-center text-slate-500">
-                            Veri yukleniyor...
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
 
             {/* Alerts Tab */}
             {activeTab === 'alerts' && (
