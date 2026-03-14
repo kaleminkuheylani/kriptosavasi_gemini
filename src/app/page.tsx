@@ -203,6 +203,7 @@ export default function Home() {
   const [chatLoading, setChatLoading] = useState(false);
   const [lastToolsUsed, setLastToolsUsed] = useState<string[]>([]);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
   
   // File uploads
   const txtInputRef = useRef<HTMLInputElement>(null);
@@ -356,10 +357,13 @@ export default function Home() {
     ));
   }, [searchQuery, stocks]);
 
-  // Auto scroll chat
+  // Auto scroll chat — scrollIntoView yerine container.scrollTop kullan (Dialog icerisinde guvenilir)
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatMessages]);
+    const container = chatScrollRef.current;
+    if (container) {
+      container.scrollTop = container.scrollHeight;
+    }
+  }, [chatMessages, chatLoading]);
 
   const isInWatchlist = (symbol: string) => watchlist.some(item => item.symbol === symbol);
 
@@ -422,11 +426,109 @@ export default function Home() {
     }
   };
 
+  // Derin Arastirma — /api/research (OpenAI Agents multi-agent workflow)
+  // Tetikleyici: "[SEMBOL] araştır/araştırma/deep/research/fk/p/e/sektör"
+  const RESEARCH_PATTERN = /\b([A-Z]{2,6})\b.*(araştır|arastir|deep|research|fk|f\/k|p\/e|sektör|sektor|endüstri|endustri)/i;
+  const RESEARCH_PATTERN_REV = /(araştır|arastir|deep|research|fk|f\/k|p\/e|sektör|sektor|endüstri|endustri).*\b([A-Z]{2,6})\b/i;
+
+  const extractResearchSymbol = (text: string): string | null => {
+    const m = text.match(RESEARCH_PATTERN) || text.match(RESEARCH_PATTERN_REV);
+    if (!m) return null;
+    const sym = m[1] || m[2];
+    // BIST sembollerine benziyor mu kontrol et
+    return stocks.some(s => s.code === sym.toUpperCase()) ? sym.toUpperCase() : null;
+  };
+
+  const runResearchInChat = async (symbol: string, userMessage: string) => {
+    setChatMessages(prev => [...prev, { role: 'user', content: userMessage, timestamp: new Date() }]);
+    setChatInput('');
+    setChatLoading(true);
+
+    // Bekleme mesaji
+    setChatMessages(prev => [...prev, {
+      role: 'assistant',
+      content: `🔬 ${symbol} için derin araştırma başlatıldı...\nWeb kaynakları taranıyor, F/K ve sektör verileri çekiliyor.`,
+      timestamp: new Date(),
+    }]);
+
+    try {
+      const res = await fetch('/api/research', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol }),
+      });
+      const data = await res.json();
+
+      if (data.success) {
+        const d = data.data;
+        const lines = [
+          `## 🔬 ${d.stock}${d.company_name ? ` — ${d.company_name}` : ''} Derin Araştırma`,
+          ``,
+          `**💰 Fiyat:** ${d.price != null ? `${d.price.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ${d.currency}` : 'Bulunamadı'}`,
+          `**🏭 Sektör:** ${d.sector || '—'}  |  **Endüstri:** ${d.industry || '—'}`,
+          ``,
+          `**📊 Değerleme:**`,
+          `• Hisse F/K: ${d.pe_ratio != null ? d.pe_ratio.toFixed(1) : '—'}`,
+          `• Sektör Ort. F/K: ${d.industry_pe != null ? d.industry_pe.toFixed(1) : '—'}`,
+          ``,
+          `**📈 Sektör Büyüme:** ${d.industry_growth || '—'}`,
+          ``,
+          `**💡 Özet:** ${d.summary}`,
+        ].join('\n');
+
+        // Bekleme mesajini gercek sonucla degistir
+        setChatMessages(prev => {
+          const updated = [...prev];
+          updated[updated.length - 1] = {
+            role: 'assistant',
+            content: lines,
+            suggestedQuestions: [
+              `${symbol} teknik analizi yap`,
+              `${symbol} takip listeme ekle`,
+              `${d.sector || 'sektör'} hisseleri karşılaştır`,
+            ],
+            timestamp: new Date(),
+          };
+          return updated;
+        });
+      } else {
+        setChatMessages(prev => {
+          const updated = [...prev];
+          updated[updated.length - 1] = {
+            role: 'assistant',
+            content: `❌ Araştırma başarısız: ${data.error}`,
+            timestamp: new Date(),
+          };
+          return updated;
+        });
+      }
+    } catch {
+      setChatMessages(prev => {
+        const updated = [...prev];
+        updated[updated.length - 1] = {
+          role: 'assistant',
+          content: '❌ Araştırma sırasında bağlantı hatası.',
+          timestamp: new Date(),
+        };
+        return updated;
+      });
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
   // AI Agent Chat
   const sendToAgent = async () => {
     if (!chatInput.trim() || chatLoading) return;
-    
+
     const userMessage = chatInput.trim();
+
+    // Derin arastirma pattern'i yakala → /api/research yonlendir
+    const researchSymbol = extractResearchSymbol(userMessage);
+    if (researchSymbol) {
+      return runResearchInChat(researchSymbol, userMessage);
+    }
+
     setChatInput('');
     setChatMessages(prev => [...prev, { role: 'user', content: userMessage, timestamp: new Date() }]);
     setChatLoading(true);
@@ -1683,29 +1785,30 @@ export default function Home() {
           )}
 
           {/* Chat Messages - Scrollable div instead of ScrollArea */}
-          <div className="flex-1 min-h-0 overflow-y-auto">
+          <div ref={chatScrollRef} className="flex-1 min-h-0 overflow-y-auto">
             <div className="space-y-4 p-4">
               {chatMessages.length === 0 && (
                 <div className="text-center py-8">
                   <Bot className="h-12 w-12 text-slate-600 mx-auto mb-4" />
                   <p className="text-slate-400">Merhaba! Size nasil yardimci olabilirim?</p>
+                  <p className="text-xs text-slate-600 mt-1">💡 <span className="text-cyan-700">🔬 Mavi</span> butonlar derin araştırma yapar (F/K, sektör, büyüme)</p>
                   <div className="flex flex-wrap gap-2 justify-center mt-4">
                     {[
-                      'Gunun yukselen hisseleri',
-                      'THYAO hisse analizi',
-                      'Takip listemi goster',
-                      'KAP haberleri',
-                    ].map((suggestion) => (
+                      { label: '📈 Günün kazananları', tip: false },
+                      { label: '🔬 THYAO araştır', tip: true },
+                      { label: '🔬 GARAN sektör analizi', tip: true },
+                      { label: '📋 Takip listemi göster', tip: false },
+                      { label: '📰 KAP haberleri', tip: false },
+                      { label: '🔬 AKBNK F/K oranı', tip: true },
+                    ].map(({ label, tip }) => (
                       <Button
-                        key={suggestion}
+                        key={label}
                         variant="outline"
                         size="sm"
-                        className="border-slate-700 text-slate-400 hover:text-white"
-                        onClick={() => {
-                          setChatInput(suggestion);
-                        }}
+                        className={`border-slate-700 hover:text-white ${tip ? 'text-cyan-400 border-cyan-900/50 hover:border-cyan-500/50' : 'text-slate-400'}`}
+                        onClick={() => setChatInput(label.replace(/^[^\s]+ /, ''))}
                       >
-                        {suggestion}
+                        {label}
                       </Button>
                     ))}
                   </div>
