@@ -253,7 +253,8 @@ export default function Home() {
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [authOpen, setAuthOpen] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
-  const [rumuzInput, setRumuzInput] = useState('');
+  const [emailInput, setEmailInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
 
   // Fetch current user
@@ -794,43 +795,52 @@ export default function Home() {
 
   // Auth Handler
   const handleAuth = async () => {
-    if (!rumuzInput.trim()) return;
-    
+    if (!emailInput.trim() || !passwordInput) return;
+
     setAuthLoading(true);
     try {
       const response = await fetch('/api/auth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          rumuz: rumuzInput.trim(),
+          email: emailInput.trim(),
+          password: passwordInput,
           action: authMode,
         }),
       });
-      
+
       const data = await response.json();
-      
+
       if (data.success) {
+        if (data.requiresConfirmation) {
+          toast({ title: 'E-posta doğrulaması gerekli', description: data.message });
+          setAuthOpen(false);
+          setEmailInput('');
+          setPasswordInput('');
+          return;
+        }
         setCurrentUser(data.user);
         setAuthOpen(false);
-        setRumuzInput('');
+        setEmailInput('');
+        setPasswordInput('');
         fetchWatchlist();
         fetchAlerts();
-        toast({ 
-          title: 'Başarılı', 
-          description: data.message 
+        toast({
+          title: 'Başarılı',
+          description: data.message
         });
       } else {
-        toast({ 
-          title: 'Hata', 
-          description: data.error, 
-          variant: 'destructive' 
+        toast({
+          title: 'Hata',
+          description: data.error,
+          variant: 'destructive'
         });
       }
     } catch {
-      toast({ 
-        title: 'Hata', 
-        description: 'Bağlantı hatası', 
-        variant: 'destructive' 
+      toast({
+        title: 'Hata',
+        description: 'Bağlantı hatası',
+        variant: 'destructive'
       });
     } finally {
       setAuthLoading(false);
@@ -1837,28 +1847,39 @@ export default function Home() {
               </div>
               <div>
                 <DialogTitle className="text-xl">{authMode === 'login' ? 'Giris Yap' : 'Kayit Ol'}</DialogTitle>
-                <p className="text-sm text-slate-400">Sifresiz, rumuz ile erisim</p>
+                <p className="text-sm text-slate-400">E-posta ve sifre ile guvenli erisim</p>
               </div>
             </div>
           </DialogHeader>
 
           <div className="space-y-4">
             <div>
-              <label className="text-sm text-slate-400 mb-2 block">Rumuz (Kullanici Adi)</label>
+              <label className="text-sm text-slate-400 mb-2 block">E-posta</label>
               <Input
-                placeholder="rumuzunuz"
-                value={rumuzInput}
-                onChange={(e) => setRumuzInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleAuth();
-                }}
+                type="email"
+                placeholder="ornek@email.com"
+                value={emailInput}
+                onChange={(e) => setEmailInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleAuth(); }}
+                className="bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 focus-visible:ring-emerald-500"
+              />
+            </div>
+
+            <div>
+              <label className="text-sm text-slate-400 mb-2 block">Sifre</label>
+              <Input
+                type="password"
+                placeholder="En az 8 karakter, harf ve rakam"
+                value={passwordInput}
+                onChange={(e) => setPasswordInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleAuth(); }}
                 className="bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 focus-visible:ring-emerald-500"
               />
             </div>
 
             <Button
               onClick={handleAuth}
-              disabled={!rumuzInput.trim() || authLoading}
+              disabled={!emailInput.trim() || !passwordInput || authLoading}
               className="w-full bg-gradient-to-r from-emerald-600 to-cyan-600 hover:opacity-90"
             >
               {authLoading ? (

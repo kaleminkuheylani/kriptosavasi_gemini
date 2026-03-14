@@ -1,78 +1,116 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
 import ZAI from 'z-ai-web-dev-sdk';
 import { cookies } from 'next/headers';
+import { serverClient } from '@/lib/supabase';
 
-const prisma = new PrismaClient();
-
-// ─── Rate Limiting + Token Budget ────────────────────────────────────────────
-interface RateLimitEntry {
-  requests: number[]; // Unix timestamps of recent requests
-  tokens: number;     // tokens used today
-  tokenDate: string;  // YYYY-MM-DD
+// ─── Supabase client helper (uses user's session JWT for RLS) ────────────────
+async function getAgentSupabaseClient() {
+  const cs = await cookies();
+  const token = cs.get('sb-access-token')?.value ?? null;
+  return { sb: serverClient(token), token };
 }
 
-const rateLimitStore = new Map<string, RateLimitEntry>();
+// ─── Rate Limiting ────────────────────────────────────────────────────────────
+// In-memory for per-minute sliding window (too granular for DB)
+// Daily token budget is persisted in Supabase user_usage table
+
+interface RpmEntry { requests: number[] }
+const rpmStore = new Map<string, RpmEntry>();
 
 const LIMITS = {
   user:  { rpm: 15, dailyTokens: 60_000 },
   guest: { rpm:  5, dailyTokens: 15_000 },
 };
 
-function getRateLimitEntry(key: string): RateLimitEntry {
-  if (!rateLimitStore.has(key)) {
-    rateLimitStore.set(key, { requests: [], tokens: 0, tokenDate: '' });
-  }
-  return rateLimitStore.get(key)!;
-}
-
-/** Returns { throttled, maxTokens } — never throws, never surfaces to user */
-function checkRateLimit(userId: string | null): { throttled: boolean; maxTokens: number } {
+/** Per-minute sliding window — checked synchronously, no DB needed */
+function checkRpm(userId: string | null): boolean {
   const key = userId || 'guest';
   const limits = userId ? LIMITS.user : LIMITS.guest;
-  const entry = getRateLimitEntry(key);
+  if (!rpmStore.has(key)) rpmStore.set(key, { requests: [] });
+  const entry = rpmStore.get(key)!;
   const now = Date.now();
-
-  // Sliding window: keep only timestamps within last 60 s
   entry.requests = entry.requests.filter(t => now - t < 60_000);
-
-  // Reset daily token counter if date changed
-  const today = new Date().toISOString().slice(0, 10);
-  if (entry.tokenDate !== today) {
-    entry.tokens = 0;
-    entry.tokenDate = today;
-  }
-
-  const overRpm = entry.requests.length >= limits.rpm;
-  const overDaily = entry.tokens >= limits.dailyTokens;
-
-  // Record this request
+  const over = entry.requests.length >= limits.rpm;
   entry.requests.push(now);
-
-  if (overDaily) {
-    // Heavily throttle: return a short canned response
-    return { throttled: true, maxTokens: 0 };
-  }
-  if (overRpm) {
-    // Soft throttle: reduce quality silently
-    return { throttled: false, maxTokens: 400 };
-  }
-  return { throttled: false, maxTokens: 1500 };
+  return over; // true = throttled
 }
 
-function recordTokenUsage(userId: string | null, tokens: number) {
-  const key = userId || 'guest';
-  const entry = getRateLimitEntry(key);
-  const today = new Date().toISOString().slice(0, 10);
-  if (entry.tokenDate !== today) { entry.tokens = 0; entry.tokenDate = today; }
-  entry.tokens += tokens;
+/**
+ * Check + record daily usage in Supabase user_usage table.
+ * Returns { throttled, maxTokens }.
+ * Falls back to unthrottled on DB error so users aren't blocked by Supabase issues.
+ */
+async function checkAndRecordUsage(
+  userId: string | null,
+  sb: ReturnType<typeof serverClient>,
+): Promise<{ throttled: boolean; maxTokens: number }> {
+  const limits = userId ? LIMITS.user : LIMITS.guest;
+
+  // Guests: no DB tracking, just RPM
+  if (!userId) {
+    return { throttled: false, maxTokens: 1500 };
+  }
+
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+
+    const { data: row } = await sb
+      .from('user_usage')
+      .select('request_count, token_count')
+      .eq('user_id', userId)
+      .eq('date', today)
+      .maybeSingle();
+
+    const requestCount = (row?.request_count ?? 0) as number;
+    const tokenCount   = (row?.token_count   ?? 0) as number;
+
+    // Increment request counter
+    await sb.from('user_usage').upsert(
+      { user_id: userId, date: today, request_count: requestCount + 1, token_count: tokenCount },
+      { onConflict: 'user_id,date' }
+    );
+
+    if (tokenCount >= limits.dailyTokens) return { throttled: true,  maxTokens: 0   };
+    if (requestCount >= limits.rpm * 10)  return { throttled: false, maxTokens: 400 }; // soft
+    return { throttled: false, maxTokens: 1500 };
+  } catch {
+    return { throttled: false, maxTokens: 1500 }; // fail open
+  }
+}
+
+async function recordTokenUsage(
+  userId: string | null,
+  tokens: number,
+  sb: ReturnType<typeof serverClient>,
+) {
+  if (!userId || tokens <= 0) return;
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const { data: row } = await sb
+      .from('user_usage')
+      .select('token_count')
+      .eq('user_id', userId)
+      .eq('date', today)
+      .maybeSingle();
+
+    const prev = (row?.token_count ?? 0) as number;
+    await sb.from('user_usage').upsert(
+      { user_id: userId, date: today, token_count: prev + tokens },
+      { onConflict: 'user_id,date' }
+    );
+  } catch { /* ignore */ }
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Helper - Get current user
-async function getCurrentUserId() {
-  const cookieStore = await cookies();
-  return cookieStore.get('userId')?.value || null;
+/** Get the authenticated Supabase user id from the session cookie */
+async function getCurrentUserId(): Promise<string | null> {
+  const cs = await cookies();
+  const token = cs.get('sb-access-token')?.value ?? null;
+  if (!token) return null;
+  try {
+    const { data: { user } } = await serverClient(token).auth.getUser();
+    return user?.id ?? null;
+  } catch { return null; }
 }
 
 // Tool Definitions
@@ -334,8 +372,13 @@ async function getStockPriceEnhanced(symbol: string, userId: string | null) {
     }
   }
 
-  // Step 3: 1-month historical summary (parallel with step 4)
-  const [histResult, watchlistItem, activeAlerts] = await Promise.all([
+  // Step 3: 1-month historical summary + user status (parallel)
+  const sbClient = serverClient(await (async () => {
+    const cs = await cookies();
+    return cs.get('sb-access-token')?.value ?? null;
+  })());
+
+  const [histResult, wlRow, alertRows] = await Promise.all([
     getStockHistory(sym, '1M') as Promise<{
       success: boolean;
       data?: Array<{ date: string; close: number; high: number; low: number; volume: number }>;
@@ -343,44 +386,46 @@ async function getStockPriceEnhanced(symbol: string, userId: string | null) {
       trend?: string;
     }>,
     userId
-      ? prisma.watchlistItem.findFirst({ where: { symbol: sym, userId } })
-      : Promise.resolve(null),
+      ? sbClient.from('watchlist_items').select('*').eq('user_id', userId).eq('symbol', sym).maybeSingle()
+      : Promise.resolve({ data: null }),
     userId
-      ? prisma.priceAlert.findMany({ where: { symbol: sym, userId, active: true } })
-      : Promise.resolve([]),
+      ? sbClient.from('price_alerts').select('*').eq('user_id', userId).eq('symbol', sym).eq('active', true)
+      : Promise.resolve({ data: [] }),
   ]);
+
+  const watchlistItem = wlRow.data as Record<string, unknown> | null;
+  const activeAlerts  = (alertRows.data ?? []) as Array<Record<string, unknown>>;
 
   let historicalSummary: Record<string, unknown> | null = null;
   if (histResult.success && histResult.data && histResult.data.length > 0) {
     const closes = histResult.data.map(d => d.close);
-    const highs = histResult.data.map(d => d.high);
-    const lows = histResult.data.map(d => d.low);
-    const first = closes[0];
-    const last = closes[closes.length - 1];
+    const highs  = histResult.data.map(d => d.high);
+    const lows   = histResult.data.map(d => d.low);
+    const first  = closes[0];
+    const last   = closes[closes.length - 1];
     historicalSummary = {
       period: '1M',
       dataPoints: histResult.data.length,
       firstClose: first,
-      lastClose: last,
+      lastClose:  last,
       monthChangePercent: first ? +((last - first) / first * 100).toFixed(2) : null,
       high1M: Math.max(...highs),
-      low1M: Math.min(...lows),
+      low1M:  Math.min(...lows),
       sma20: histResult.indicators?.sma20 ? +histResult.indicators.sma20.toFixed(2) : null,
       sma50: histResult.indicators?.sma50 ? +histResult.indicators.sma50.toFixed(2) : null,
       trend: histResult.trend || 'NEUTRAL',
     };
   }
 
-  // Step 4: User status for this symbol
   const userStatus = userId
     ? {
         isInWatchlist: !!watchlistItem,
-        addedAt: watchlistItem?.createdAt ?? null,
-        targetPrice: watchlistItem?.targetPrice ?? null,
-        activeAlerts: activeAlerts.map(a => ({
-          targetPrice: a.targetPrice,
-          condition: a.condition,
-          triggered: a.triggered,
+        addedAt:       watchlistItem?.created_at ?? null,
+        targetPrice:   watchlistItem?.target_price ?? null,
+        activeAlerts:  activeAlerts.map(a => ({
+          targetPrice: a.target_price,
+          condition:   a.condition,
+          triggered:   a.triggered,
         })),
         alertCount: activeAlerts.length,
       }
@@ -396,38 +441,62 @@ async function getStockPriceEnhanced(symbol: string, userId: string | null) {
 }
 
 async function getWatchlist(userId: string | null) {
+  if (!userId) return { success: true, data: [], count: 0 };
   try {
-    const items = await prisma.watchlistItem.findMany({ 
-      where: userId ? { userId } : { userId: null },
-      orderBy: { createdAt: 'desc' } 
-    });
-    return { success: true, data: items, count: items.length };
+    const cs = await cookies();
+    const token = cs.get('sb-access-token')?.value ?? null;
+    const sb = serverClient(token);
+    const { data, error } = await sb
+      .from('watchlist_items')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return { success: true, data: data ?? [], count: data?.length ?? 0 };
   } catch (error) {
     return { success: false, error: String(error) };
   }
 }
 
 async function addToWatchlist(symbol: string, name: string, userId: string | null) {
+  if (!userId) return { success: false, error: 'Giriş yapmanız gerekli' };
   try {
-    const existing = await prisma.watchlistItem.findFirst({
-      where: { symbol: symbol.toUpperCase(), userId: userId || null },
-    });
+    const cs = await cookies();
+    const token = cs.get('sb-access-token')?.value ?? null;
+    const sb = serverClient(token);
+
+    const { data: existing } = await sb
+      .from('watchlist_items')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('symbol', symbol.toUpperCase())
+      .maybeSingle();
+
     if (existing) return { success: false, error: 'Bu hisse zaten takip listesinde' };
-    
-    const item = await prisma.watchlistItem.create({
-      data: { symbol: symbol.toUpperCase(), name, userId: userId || null },
-    });
-    return { success: true, data: item };
+
+    const { data, error } = await sb
+      .from('watchlist_items')
+      .insert({ user_id: userId, symbol: symbol.toUpperCase(), name })
+      .select()
+      .single();
+    if (error) throw error;
+    return { success: true, data };
   } catch (error) {
     return { success: false, error: String(error) };
   }
 }
 
 async function removeFromWatchlist(symbol: string, userId: string | null) {
+  if (!userId) return { success: false, error: 'Giriş yapmanız gerekli' };
   try {
-    await prisma.watchlistItem.deleteMany({ 
-      where: { symbol: symbol.toUpperCase(), userId: userId || null } 
-    });
+    const cs = await cookies();
+    const token = cs.get('sb-access-token')?.value ?? null;
+    const sb = serverClient(token);
+    const { error } = await sb
+      .from('watchlist_items')
+      .delete()
+      .eq('user_id', userId)
+      .eq('symbol', symbol.toUpperCase());
+    if (error) throw error;
     return { success: true, message: `${symbol} takip listesinden kaldırıldı` };
   } catch (error) {
     return { success: false, error: String(error) };
@@ -739,23 +808,36 @@ async function getTopLosers(limit: number = 10) {
 }
 
 async function getPriceAlerts(userId: string | null) {
+  if (!userId) return { success: true, data: [], count: 0 };
   try {
-    const alerts = await prisma.priceAlert.findMany({
-      where: { active: true, userId: userId || null },
-      orderBy: { createdAt: 'desc' },
-    });
-    return { success: true, data: alerts, count: alerts.length };
+    const cs = await cookies();
+    const token = cs.get('sb-access-token')?.value ?? null;
+    const sb = serverClient(token);
+    const { data, error } = await sb
+      .from('price_alerts')
+      .select('*')
+      .eq('active', true)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return { success: true, data: data ?? [], count: data?.length ?? 0 };
   } catch (error) {
     return { success: false, error: String(error) };
   }
 }
 
 async function createPriceAlert(symbol: string, targetPrice: number, condition: 'above' | 'below', userId: string | null) {
+  if (!userId) return { success: false, error: 'Giriş yapmanız gerekli' };
   try {
-    const alert = await prisma.priceAlert.create({
-      data: { symbol: symbol.toUpperCase(), targetPrice, condition, userId: userId || null },
-    });
-    return { success: true, data: alert };
+    const cs = await cookies();
+    const token = cs.get('sb-access-token')?.value ?? null;
+    const sb = serverClient(token);
+    const { data, error } = await sb
+      .from('price_alerts')
+      .insert({ user_id: userId, symbol: symbol.toUpperCase(), target_price: targetPrice, condition })
+      .select()
+      .single();
+    if (error) throw error;
+    return { success: true, data };
   } catch (error) {
     return { success: false, error: String(error) };
   }
@@ -1552,8 +1634,10 @@ export async function POST(request: NextRequest) {
     }
 
     // ── Rate Limiting ─────────────────────────────────────────────────────
-    const { throttled, maxTokens: allowedTokens } = checkRateLimit(userId);
-    if (throttled) {
+    const rpmThrottled = checkRpm(userId);
+    const sb = await getAgentSupabaseClient();
+    const { throttled, maxTokens: allowedTokens } = await checkAndRecordUsage(userId, sb);
+    if (throttled && !rpmThrottled) {
       // Günlük bütçe tükendi — sessizce kısa yanıt ver
       return NextResponse.json({
         success: true,
@@ -1759,7 +1843,7 @@ SORULAR: GARAN 3 ay sonraki fiyatı ne olur? | AKBNK ile karşılaştırır mıs
       rawText = finalData.choices?.[0]?.message?.content || '';
       // Record token usage for budget tracking
       const usage = finalData.usage?.total_tokens ?? 0;
-      if (usage > 0) recordTokenUsage(userId, usage);
+      if (usage > 0) recordTokenUsage(userId, usage, sb);
     } else {
       rawText = `İşlem tamamlandı. Araçlar: ${immediateTools.join(', ')}`;
     }
