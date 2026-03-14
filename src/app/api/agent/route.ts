@@ -523,41 +523,27 @@ async function webSearch(query: string) {
 // Step 1: LLM generates better search queries
 async function generateSearchQueries(userMessage: string): Promise<string[]> {
   try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY || process.env.GROQ_API_KEY || ''}`,
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content: `Sen bir arama uzmanısın. Kullanıcının sorusunu daha iyi web aramaları için optimize et.
-BIST, hisse, finans ve Türk piyasası konularında uzmanlaşmışsın.
-JSON formatında sadece 2-3 arama sorgusu döndür. Başka açıklama yapma.
-Örnek: {"queries": ["THYAO hisse analiz 2024", "Türk Hava Yolları KAP bildirimi", "THYAO teknik analiz"]}`
-          },
-          {
-            role: 'user',
-            content: `Şu soru için en iyi 2-3 arama sorgusunu üret: "${userMessage}"`
-          }
-        ],
-        temperature: 0.3,
-        max_tokens: 200,
-      }),
-    });
+    const zai = await ZAI.create();
+    const response = await zai.chat.completions.create({
+      messages: [
+        {
+          role: 'user' as const,
+          content: `Sen bir arama uzmanısın. BIST, hisse, finans ve Türk piyasası konularında uzmanlaşmışsın.
+Şu soru için en iyi 2-3 web arama sorgusunu JSON formatında üret. Başka açıklama yapma.
+Format: {"queries": ["sorgu1", "sorgu2", "sorgu3"]}
 
-    if (response.ok) {
-      const data = await response.json();
-      const content = data.choices?.[0]?.message?.content || '';
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
-        if (Array.isArray(parsed.queries) && parsed.queries.length > 0) {
-          return parsed.queries.slice(0, 3);
+Soru: "${userMessage}"`,
         }
+      ],
+      thinking: { type: 'disabled' },
+    } as Parameters<typeof zai.chat.completions.create>[0]);
+
+    const content = (response as { choices?: Array<{ message?: { content?: string } }> }).choices?.[0]?.message?.content || '';
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (Array.isArray(parsed.queries) && parsed.queries.length > 0) {
+        return parsed.queries.slice(0, 3);
       }
     }
   } catch (_e) {
@@ -597,7 +583,7 @@ function extractSearchContent(rawResults: unknown): Array<{ title: string; snipp
   return items.filter(i => i.title || i.snippet).slice(0, 6);
 }
 
-// Step 3: Summarize extracted content with gpt-4o-mini
+// Step 3: Summarize extracted content
 async function summarizeSearchResults(
   items: Array<{ title: string; snippet: string; url?: string }>,
   userMessage: string
@@ -609,34 +595,26 @@ async function summarizeSearchResults(
     .join('\n\n');
 
   try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY || process.env.GROQ_API_KEY || ''}`,
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content: `Sen bir haber ve finans analiz asistanısın. Verilen arama sonuçlarını kullanıcının sorusuyla ilişkilendirerek özetle.
-Sadece başlık ve paragraf bilgilerini kullan. Kaynaklara atıfta bulun. Türkçe yanıt ver.`
-          },
-          {
-            role: 'user',
-            content: `Kullanıcı sorusu: "${userMessage}"\n\nArama sonuçları:\n${itemsText}\n\nBu sonuçları kullanıcı sorusuyla ilgili şekilde özetle.`
-          }
-        ],
-        temperature: 0.5,
-        max_tokens: 1000,
-      }),
-    });
+    const zai = await ZAI.create();
+    const response = await zai.chat.completions.create({
+      messages: [
+        {
+          role: 'user' as const,
+          content: `Sen bir haber ve finans analiz asistanısın. Verilen arama sonuçlarını kullanıcının sorusuyla ilişkilendirerek Türkçe özetle. Kaynaklara atıfta bulun.
 
-    if (response.ok) {
-      const data = await response.json();
-      return data.choices?.[0]?.message?.content || itemsText;
-    }
+Kullanıcı sorusu: "${userMessage}"
+
+Arama sonuçları:
+${itemsText}
+
+Bu sonuçları kullanıcı sorusuyla ilgili şekilde özetle.`,
+        }
+      ],
+      thinking: { type: 'disabled' },
+    } as Parameters<typeof zai.chat.completions.create>[0]);
+
+    const content = (response as { choices?: Array<{ message?: { content?: string } }> }).choices?.[0]?.message?.content || '';
+    if (content) return content;
   } catch (_e) {
     // Fallback to raw items
   }
@@ -853,47 +831,35 @@ async function createPriceAlert(symbol: string, targetPrice: number, condition: 
 // TXT File Analysis
 async function readTxtFile(content: string, filename?: string) {
   try {
-    // Analyze the TXT content using gpt-4o-mini
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY || process.env.GROQ_API_KEY || ''}`,
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content: `Sen profesyonel bir finansal analiz asistanısın. Kullanıcının yüklediği TXT dosyasını analiz et ve:
+    const zai = await ZAI.create();
+    const response = await zai.chat.completions.create({
+      messages: [
+        {
+          role: 'user' as const,
+          content: `Sen profesyonel bir finansal analiz asistanısın. Aşağıdaki TXT dosyasını analiz et:
 1. Dosyanın içeriğini özetle
 2. Finansal veriler varsa analiz et
 3. Önemli noktaları vurgula
 4. Varsa hisse senedi kodlarını tespit et
 5. Yatırımcı için önemli bilgileri çıkar
 
-Türkçe yanıt ver ve profesyonel bir rapor formatı kullan.`
-          },
-          {
-            role: 'user',
-            content: `Dosya adı: ${filename || 'bilinmiyor'}\n\nDosya içeriği:\n\`\`\`\n${content.slice(0, 5000)}\n\`\`\`\n\nBu dosyayı analiz et ve raporla.`
-          }
-        ],
-        temperature: 0.3,
-        max_tokens: 1200,
-      }),
-    });
+Türkçe yanıt ver ve profesyonel rapor formatı kullan.
 
-    if (response.ok) {
-      const data = await response.json();
-      return {
-        success: true,
-        analysis: data.choices?.[0]?.message?.content,
-        filename,
-        contentLength: content.length,
-      };
+Dosya adı: ${filename || 'bilinmiyor'}
+
+Dosya içeriği:
+\`\`\`
+${content.slice(0, 5000)}
+\`\`\``,
+        }
+      ],
+      thinking: { type: 'disabled' },
+    } as Parameters<typeof zai.chat.completions.create>[0]);
+
+    const analysis = (response as { choices?: Array<{ message?: { content?: string } }> }).choices?.[0]?.message?.content;
+    if (analysis) {
+      return { success: true, analysis, filename, contentLength: content.length };
     }
-
     return { success: false, error: 'Analiz başarısız' };
   } catch (error) {
     return { success: false, error: String(error) };
@@ -1772,6 +1738,34 @@ function selectToolsForQuery(message: string): {
   return { tools: [...new Set(tools)], params, queryType: 'general', queryMeta: {} };
 }
 
+// Sanitize conversation history: merge consecutive same-role messages,
+// ensure starts with user, ends with assistant (before new user message)
+function sanitizeHistory(
+  history: Array<{ role: string; content: string }>
+): Array<{ role: 'user' | 'assistant'; content: string }> {
+  const filtered = history
+    .filter(m => m.role === 'user' || m.role === 'assistant')
+    .map(m => ({ role: m.role as 'user' | 'assistant', content: String(m.content || '') }));
+
+  // Merge consecutive same-role messages (e.g. multiple assistant thread messages)
+  const merged: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+  for (const msg of filtered) {
+    if (merged.length > 0 && merged[merged.length - 1].role === msg.role) {
+      merged[merged.length - 1] = {
+        role: msg.role,
+        content: merged[merged.length - 1].content + '\n' + msg.content,
+      };
+    } else {
+      merged.push({ ...msg });
+    }
+  }
+
+  // Must start with user
+  while (merged.length > 0 && merged[0].role !== 'user') merged.shift();
+
+  return merged;
+}
+
 // Builds a compact text representation of tool results for the final LLM
 // For web_search, uses the pre-generated summary instead of raw items to save tokens
 function buildToolResultsText(toolResults: Record<string, unknown>): string {
@@ -2046,37 +2040,54 @@ SORULAR: GARAN 3 ay sonraki fiyatı ne olur? | AKBNK ile karşılaştırır mıs
 
 "SORULAR:" satırı her zaman son satır olmalı, 3 kısa Türkçe soru içermeli.`;
 
-    const finalResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY || process.env.GROQ_API_KEY || ''}`,
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          ...conversationHistory.slice(-4).map((m: { role: string; content: string }) => ({
-            role: m.role,
-            content: m.content,
-          })),
-          { role: 'user', content: userPromptContent },
-        ],
-        temperature: 0.7,
-        max_tokens: allowedTokens,  // dynamic: soft throttle reduces this
-      }),
-    });
+    // Sanitize and build conversation history (avoids consecutive-role errors with Claude)
+    const cleanHistory = sanitizeHistory(
+      conversationHistory.slice(-8) as Array<{ role: string; content: string }>
+    ).slice(-4);
+
+    const chatMessages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [
+      { role: 'system', content: systemPrompt },
+      ...cleanHistory,
+      { role: 'user', content: userPromptContent },
+    ];
 
     let rawText = '';
-
-    if (finalResponse.ok) {
-      const finalData = await finalResponse.json();
-      rawText = finalData.choices?.[0]?.message?.content || '';
-      // Record token usage for budget tracking
-      const usage = finalData.usage?.total_tokens ?? 0;
-      if (usage > 0) recordTokenUsage(userId, usage, sb);
-    } else {
-      rawText = `İşlem tamamlandı. Araçlar: ${immediateTools.join(', ')}`;
+    try {
+      const zai = await ZAI.create();
+      const finalResponse = await zai.chat.completions.create({
+        messages: chatMessages,
+        thinking: { type: 'disabled' },
+      } as Parameters<typeof zai.chat.completions.create>[0]);
+      rawText = (finalResponse as { choices?: Array<{ message?: { content?: string } }> }).choices?.[0]?.message?.content || '';
+      // Approximate token usage
+      const approxTokens = Math.ceil(rawText.length / 4);
+      if (approxTokens > 0) recordTokenUsage(userId, approxTokens, sb);
+    } catch (_zaiErr) {
+      // Fallback: direct API call with sanitized messages
+      try {
+        const fallbackResp = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${process.env.OPENAI_API_KEY || process.env.GROQ_API_KEY || ''}`,
+          },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            messages: chatMessages,
+            temperature: 0.7,
+            max_tokens: allowedTokens,
+          }),
+        });
+        if (fallbackResp.ok) {
+          const fallbackData = await fallbackResp.json();
+          rawText = fallbackData.choices?.[0]?.message?.content || '';
+          const usage = fallbackData.usage?.total_tokens ?? 0;
+          if (usage > 0) recordTokenUsage(userId, usage, sb);
+        }
+      } catch (_fallbackErr) {
+        // ignore
+      }
+      if (!rawText) rawText = `İşlem tamamlandı. Araçlar: ${immediateTools.join(', ')}`;
     }
 
     // Extract "SORULAR:" line for suggested questions
