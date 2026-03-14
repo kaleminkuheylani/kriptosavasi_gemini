@@ -451,14 +451,14 @@ export default function StockDetailPage() {
     return (
       <div className="min-h-screen bg-slate-950 text-white">
         <div className="mx-auto max-w-7xl px-4 py-10">
-          <Link href="/" className="inline-flex items-center gap-2 text-slate-400 hover:text-white">
+          <Link href="/" className="inline-flex items-center gap-2 text-slate-200 hover:text-white">
             <ArrowLeft className="h-4 w-4" />
             Ana sayfaya don
           </Link>
           <Card className="mt-6 border-slate-800 bg-slate-900">
             <CardContent className="py-12 text-center">
               <p className="text-lg font-medium text-white">Hisse bulunamadi: {symbol}</p>
-              <p className="mt-2 text-sm text-slate-400">Lutfen farkli bir hisse kodu deneyin.</p>
+              <p className="mt-2 text-sm text-slate-300">Lutfen farkli bir hisse kodu deneyin.</p>
             </CardContent>
           </Card>
         </div>
@@ -471,7 +471,7 @@ export default function StockDetailPage() {
       <div className="mx-auto max-w-7xl space-y-6 px-4 py-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="space-y-2">
-            <Link href="/" className="inline-flex items-center gap-2 text-slate-400 hover:text-white">
+            <Link href="/" className="inline-flex items-center gap-2 text-slate-200 hover:text-white">
               <ArrowLeft className="h-4 w-4" />
               Ana sayfa
             </Link>
@@ -481,7 +481,7 @@ export default function StockDetailPage() {
                 Detayli Hisse Sayfasi
               </Badge>
             </div>
-            <p className="text-sm text-slate-400">{stockDetail.name}</p>
+            <p className="text-sm text-slate-200">{stockDetail.name}</p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -519,7 +519,7 @@ export default function StockDetailPage() {
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <Card className="border-slate-800 bg-slate-900">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-slate-400">Son Fiyat</CardTitle>
+              <CardTitle className="text-sm font-medium text-slate-300">Son Fiyat</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="space-y-1">
@@ -544,11 +544,11 @@ export default function StockDetailPage() {
 
           <Card className="border-slate-800 bg-slate-900">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-slate-400">Gunluk Aralik</CardTitle>
+              <CardTitle className="text-sm font-medium text-slate-300">Gunluk Aralik</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="flex items-center justify-between text-sm">
-                <span className="text-slate-400">Dusuk</span>
+                <span className="text-slate-300">Dusuk</span>
                 <span className="font-medium text-red-400">{formatNumber(dailyLow)} TL</span>
               </div>
               <div className="h-2 overflow-hidden rounded bg-slate-800">
@@ -558,7 +558,7 @@ export default function StockDetailPage() {
                 />
               </div>
               <div className="flex items-center justify-between text-sm">
-                <span className="text-slate-400">Yuksek</span>
+                <span className="text-slate-300">Yuksek</span>
                 <span className="font-medium text-emerald-400">{formatNumber(dailyHigh)} TL</span>
               </div>
             </CardContent>
@@ -566,19 +566,19 @@ export default function StockDetailPage() {
 
           <Card className="border-slate-800 bg-slate-900">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-slate-400">Hacim ve Acilis</CardTitle>
+              <CardTitle className="text-sm font-medium text-slate-300">Hacim ve Acilis</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2 text-sm">
               <div className="flex items-center justify-between">
-                <span className="text-slate-400">Hacim</span>
+                <span className="text-slate-300">Hacim</span>
                 <span>{formatNumber(stockDetail.volume, 0)}</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-slate-400">Acilis</span>
+                <span className="text-slate-300">Acilis</span>
                 <span>{formatNumber(stockDetail.open)} TL</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-slate-400">Onceki Kapanis</span>
+                <span className="text-slate-300">Onceki Kapanis</span>
                 <span>{formatNumber(stockDetail.previousClose)} TL</span>
               </div>
             </CardContent>
@@ -586,7 +586,7 @@ export default function StockDetailPage() {
 
           <Card className="border-slate-800 bg-slate-900">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-slate-400">{timeframe} Performansi</CardTitle>
+              <CardTitle className="text-sm font-medium text-slate-300">{timeframe} Performansi</CardTitle>
             </CardHeader>
             <CardContent>
               {periodPerformance ? (
@@ -604,13 +604,13 @@ export default function StockDetailPage() {
                     {periodPerformance.changePercent >= 0 ? '+' : ''}
                     {formatNumber(periodPerformance.changePercent)}%
                   </p>
-                  <p className="text-sm text-slate-400">
+                  <p className="text-sm text-slate-300">
                     {periodPerformance.change >= 0 ? '+' : ''}
                     {formatNumber(periodPerformance.change)} TL
                   </p>
                 </div>
               ) : (
-                <p className="text-sm text-slate-500">Yeterli gecmis veri yok</p>
+                <p className="text-sm text-slate-400">Yeterli gecmis veri yok</p>
               )}
             </CardContent>
           </Card>
@@ -696,7 +696,7 @@ export default function StockDetailPage() {
                 </div>
               </>
             ) : (
-              <div className="flex h-[320px] items-center justify-center text-slate-400">
+              <div className="flex h-[320px] items-center justify-center text-slate-300">
                 Bu hisse icin gecmis grafik verisi yok.
               </div>
             )}
@@ -710,22 +710,22 @@ export default function StockDetailPage() {
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
               <div className="flex items-center justify-between rounded-lg bg-slate-800/50 px-3 py-2">
-                <span className="text-slate-400">SMA 20</span>
+                <span className="text-slate-300">SMA 20</span>
                 <span>{sma20 ? `${formatNumber(sma20)} TL` : '-'}</span>
               </div>
               <div className="flex items-center justify-between rounded-lg bg-slate-800/50 px-3 py-2">
-                <span className="text-slate-400">SMA 50</span>
+                <span className="text-slate-300">SMA 50</span>
                 <span>{sma50 ? `${formatNumber(sma50)} TL` : '-'}</span>
               </div>
               <div className="flex items-center justify-between rounded-lg bg-slate-800/50 px-3 py-2">
-                <span className="text-slate-400">RSI 14</span>
+                <span className="text-slate-300">RSI 14</span>
                 <span>{rsi14 ? formatNumber(rsi14) : '-'}</span>
               </div>
               <div className="flex items-center justify-between rounded-lg bg-slate-800/50 px-3 py-2">
-                <span className="text-slate-400">Yillik Volatilite</span>
+                <span className="text-slate-300">Yillik Volatilite</span>
                 <span>{volatility ? `${formatNumber(volatility)}%` : '-'}</span>
               </div>
-              <p className="pt-1 text-xs text-slate-500">
+              <p className="pt-1 text-xs text-slate-400">
                 RSI &gt; 70 asiri alim, RSI &lt; 30 asiri satim bolgesini isaret edebilir.
               </p>
             </CardContent>
@@ -743,14 +743,14 @@ export default function StockDetailPage() {
                     className="grid grid-cols-5 items-center rounded-lg bg-slate-800/40 px-3 py-2 text-xs sm:text-sm"
                   >
                     <span className="col-span-2 text-slate-300">{row.date}</span>
-                    <span className="text-right text-slate-400">{formatNumber(row.open)}</span>
-                    <span className="text-right text-slate-400">{formatNumber(row.close)}</span>
-                    <span className="text-right text-slate-500">
+                    <span className="text-right text-slate-300">{formatNumber(row.open)}</span>
+                    <span className="text-right text-slate-300">{formatNumber(row.close)}</span>
+                    <span className="text-right text-slate-400">
                       {maxVolume > 0 ? `${Math.round((row.volume / maxVolume) * 100)}%` : '0%'}
                     </span>
                   </div>
                 ))}
-                {historicalData.length === 0 && <p className="text-sm text-slate-500">Veri bulunamadi.</p>}
+                {historicalData.length === 0 && <p className="text-sm text-slate-400">Veri bulunamadi.</p>}
               </div>
             </CardContent>
           </Card>
@@ -765,7 +765,7 @@ export default function StockDetailPage() {
             <Button
               variant="ghost"
               size="sm"
-              className="text-slate-400 hover:text-white"
+              className="text-slate-300 hover:text-white"
               onClick={fetchRelatedNews}
               disabled={newsLoading}
             >
@@ -777,7 +777,7 @@ export default function StockDetailPage() {
             {newsLoading ? (
               <div className="flex items-center justify-center py-10">
                 <Loader2 className="h-6 w-6 animate-spin text-cyan-400" />
-                <span className="ml-2 text-sm text-slate-400">Haberler yukleniyor...</span>
+                <span className="ml-2 text-sm text-slate-300">Haberler yukleniyor...</span>
               </div>
             ) : relatedNews.length > 0 ? (
               <div className="space-y-2">
@@ -790,7 +790,7 @@ export default function StockDetailPage() {
                     className="block rounded-lg border border-slate-800 bg-slate-800/30 p-3 transition-colors hover:bg-slate-800/60"
                   >
                     <p className="line-clamp-2 text-sm font-medium text-white">{newsItem.title}</p>
-                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-300">
                       <Badge variant="secondary" className="bg-slate-700 text-slate-300">
                         {newsItem.source}
                       </Badge>
@@ -804,7 +804,7 @@ export default function StockDetailPage() {
                 ))}
               </div>
             ) : (
-              <p className="py-8 text-center text-sm text-slate-500">
+              <p className="py-8 text-center text-sm text-slate-400">
                 Bu hisse icin su an listelenecek haber bulunamadi.
               </p>
             )}
@@ -831,11 +831,11 @@ export default function StockDetailPage() {
                     ? `${symbol} hakkinda gorusunuzu yazin...`
                     : 'Yorum yazmak icin once giris yapin'
                 }
-                className="min-h-[90px] border-slate-700 bg-slate-900 text-white placeholder:text-slate-500"
+                className="min-h-[90px] border-slate-700 bg-slate-900 text-white placeholder:text-slate-400"
                 disabled={!currentUser || commentSubmitting}
               />
               <div className="flex items-center justify-between">
-                <p className="text-xs text-slate-500">
+                <p className="text-xs text-slate-400">
                   {currentUser
                     ? `Yazan: @${currentUser.rumuz}`
                     : 'Giris icin ana sayfadan kullanici ikonuna tiklayabilirsiniz'}
@@ -855,7 +855,7 @@ export default function StockDetailPage() {
             {commentsLoading ? (
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="h-5 w-5 animate-spin text-emerald-400" />
-                <span className="ml-2 text-sm text-slate-400">Yorumlar yukleniyor...</span>
+                <span className="ml-2 text-sm text-slate-300">Yorumlar yukleniyor...</span>
               </div>
             ) : comments.length > 0 ? (
               <div className="space-y-2">
@@ -864,13 +864,13 @@ export default function StockDetailPage() {
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <p className="text-sm font-medium text-white">@{item.authorName}</p>
-                        <p className="text-xs text-slate-500">{formatNewsDate(item.createdAt)}</p>
+                        <p className="text-xs text-slate-400">{formatNewsDate(item.createdAt)}</p>
                       </div>
                       {currentUser?.id === item.userId ? (
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-7 w-7 text-slate-500 hover:text-red-400"
+                          className="h-7 w-7 text-slate-400 hover:text-red-400"
                           onClick={() => handleDeleteComment(item.id)}
                           title="Yorumu sil"
                         >
@@ -883,7 +883,7 @@ export default function StockDetailPage() {
                 ))}
               </div>
             ) : (
-              <p className="py-6 text-center text-sm text-slate-500">
+              <p className="py-6 text-center text-sm text-slate-400">
                 Bu hisse icin henuz yorum yok. Ilk yorumu siz yapin.
               </p>
             )}
