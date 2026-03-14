@@ -22,6 +22,17 @@ interface HistoricalPoint {
   volume: number;
 }
 
+const LEGAL_DISCLAIMER =
+  'Yasal Sorumluluk Notu: Bu içerik yalnızca bilgilendirme amaçlıdır. Verilecek tüm yatırım kararları ile doğabilecek hukuki ve mali sorumluluk tamamen kullanıcıya aittir.';
+
+function ensureLegalDisclaimer(text: string): string {
+  const normalized = text.toLowerCase();
+  if (normalized.includes('hukuki') && normalized.includes('kullanıcıya aittir')) {
+    return text;
+  }
+  return `${text.trim()}\n\n${LEGAL_DISCLAIMER}`;
+}
+
 function parseNumber(value: string | number | undefined): number {
   if (value === undefined || value === null) return 0;
   if (typeof value === 'number') return value;
@@ -123,15 +134,19 @@ export async function POST(request: NextRequest) {
     const { stock, historical } = await fetchStockData(symbol.toUpperCase());
 
     // Prepare analysis prompt
-    const systemPrompt = `Sen deneyimli bir borsa analisti ve finansal danışmansın. BIST (Borsa İstanbul) hisse senetleri için teknik ve temel analiz yapıyorsun. Türkçe yanıt ver ve profesyonel bir dil kullan.
+    const systemPrompt = `Sen BIST (Borsa İstanbul) verilerini objektif şekilde yorumlayan bir finansal analiz asistanısın. Türkçe yanıt ver ve profesyonel bir dil kullan.
 
 Analizlerin şunları içermeli:
 1. 📊 Fiyat Performansı - Son dönemdeki fiyat değişimleri ve trend analizi
 2. 📈 Teknik Göstergeler - Destek/direnç seviyeleri, trend çizgileri
 3. ⚠️ Risk Değerlendirmesi - Volatilite ve risk faktörleri
-4. 💡 Öneri - Al/Sat/Bekle önerisi (yatırım tavsiyesi değildir)
+4. 🧾 Objektif Sonuç - Sadece veri temelli çıkarımlar, yönlendirme yok
 
-Önemli: Bu bir yatırım tavsiyesi değildir, sadece eğitim amaçlı teknik bir analizdir. Yanıtları madde madde ve okunabilir formatta ver.`;
+Kurallar:
+- "Al/Sat/Bekle", "öneri", "tavsiye" gibi yönlendirici ifadeler kullanma.
+- "Sinyal veriyor" gibi kesin öneri dili kurma; yalnızca göstergelerin mevcut durumunu belirt.
+- Yanıtları madde madde ve okunabilir formatta ver.
+- Yanıtın sonunda şu ifadeyi aynen ekle: "${LEGAL_DISCLAIMER}"`;
 
     let userPrompt = '';
 
@@ -210,12 +225,17 @@ Lütfen bu hisse için detaylı bir teknik analiz yap.`;
 - Hacim: ${stock.volume.toLocaleString('tr-TR')} lot
 - ${stock.volume > 1000000 ? 'Yüksek hacimli işlem görüyor' : 'Normal hacimli işlem görüyor'}
 
-### 💡 Öneri
-Bu bir yatırım tavsiyesi değildir. ${stock.changePercent >= 0 ? 'Pozitif' : 'Negatif'} momentum izlenmeli.`;
+### 🧾 Objektif Sonuç
+- Mevcut fiyat davranışı ${stock.changePercent >= 0 ? 'pozitif' : 'negatif'} momentumla uyumlu görünüyor.
+- Kesin yönlü çıkarım için daha uzun dönemli veri ve haber akışı birlikte değerlendirilmelidir.
+
+${LEGAL_DISCLAIMER}`;
       } else {
         analysis = 'Bu hisse için yeterli veri bulunamadı.';
       }
     }
+
+    analysis = ensureLegalDisclaimer(analysis);
 
     return NextResponse.json({
       success: true,

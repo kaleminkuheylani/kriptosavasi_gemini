@@ -22,6 +22,9 @@ const LIMITS = {
   guest: { rpm:  5, dailyTokens: 15_000 },
 };
 
+const LEGAL_DISCLAIMER =
+  'Yasal Sorumluluk Notu: Bu içerik yalnızca bilgilendirme amaçlıdır. Verilecek tüm yatırım kararları ile doğabilecek hukuki ve mali sorumluluk tamamen kullanıcıya aittir.';
+
 /** Per-minute sliding window — checked synchronously, no DB needed */
 function checkRpm(userId: string | null): boolean {
   const key = userId || 'guest';
@@ -184,7 +187,7 @@ const TOOLS = {
     parameters: { symbols: 'string[] - Karşılaştırılacak hisse kodları (örn: ["THYAO","GARAN","AKBNK"])' },
   },
   technical_indicators: {
-    description: 'Hisse için teknik göstergeleri hesaplar: RSI(14), SMA(20/50), Bollinger Bands. Al/Sat sinyali üretir.',
+    description: 'Hisse için teknik göstergeleri hesaplar: RSI(14), SMA(20/50), Bollinger Bands. Gösterge bazlı durum özeti üretir.',
     parameters: { symbol: 'string - Hisse kodu', period: 'string - 1M|3M|6M (varsayılan: 3M)' },
   },
   get_economic_calendar: {
@@ -201,7 +204,7 @@ const TOOLS = {
     },
   },
   deep_mathematical_analysis: {
-    description: 'Hisse için kapsamlı matematiksel derinlik analizi yapar: MACD, Stochastic Oscillator, ATR (volatilite), Fibonacci seviyeleri, Williams %R, CCI, Momentum/ROC, Yıllıklaştırılmış Volatilite, OBV (hacim-bazlı akış) ve Bileşik Sinyal skoru hesaplar.',
+    description: 'Hisse için kapsamlı matematiksel derinlik analizi yapar: MACD, Stochastic Oscillator, ATR (volatilite), Fibonacci seviyeleri, Williams %R, CCI, Momentum/ROC, Yıllıklaştırılmış Volatilite, OBV (hacim-bazlı akış) ve Bileşik Durum skoru hesaplar.',
     parameters: {
       symbol: 'string - Hisse kodu',
       period: 'string - Veri periyodu 3M|6M|1Y (varsayılan: 6M)',
@@ -901,7 +904,7 @@ async function analyzeChartImage(imageBase64: string, symbol?: string) {
 
 ${symbol ? `Hisse: ${symbol}` : ''}
 
-Not: Bu analiz yatırım tavsiyesi değildir, sadece teknik analiz özetidir.`;
+Not: Bu analiz yatırım tavsiyesi değildir, sadece teknik analiz özetidir. ${LEGAL_DISCLAIMER}`;
 
     const response = await zai.chat.completions.createVision({
       messages: [
@@ -1824,6 +1827,15 @@ function buildToolResultsText(toolResults: Record<string, unknown>): string {
   return parts.join('\n\n');
 }
 
+function ensureThreadLegalDisclaimer(text: string): string {
+  const normalized = text.toLowerCase();
+  if (normalized.includes('hukuki') && normalized.includes('kullanıcıya aittir')) {
+    return text;
+  }
+  if (!text.trim()) return `⚖️ ${LEGAL_DISCLAIMER}`;
+  return `${text.trim()} ||| ⚖️ ${LEGAL_DISCLAIMER}`;
+}
+
 // AI Agent Handler
 export async function POST(request: NextRequest) {
   try {
@@ -1992,8 +2004,8 @@ ${buildToolResultsText(toolResults)}
 
 THREAD FORMAT: Yanıtını "|||" ile ayırdığın 3 kısa mesaj olarak ver:
 Mesaj 1 — 📊 Fiyat durumu + son performans (3-4 madde)
-Mesaj 2 — 🔍 Teknik ve temel sinyaller (güçlü/zayıf noktalar)
-Mesaj 3 — 💡 Sonuç değerlendirmesi (yatırım tavsiyesi değil, sadece analiz) + not${pendingNote}`;
+Mesaj 2 — 🔍 Teknik ve temel göstergelerin özeti (güçlü/zayıf noktalar)
+Mesaj 3 — 🧾 Objektif sonuç değerlendirmesi + not${pendingNote}`;
     } else if (queryType === 'budget_advice') {
       const { budgetAmount: budget } = queryMeta as { budgetAmount: number | null };
       userPromptContent = `Kullanıcı Sorusu: "${message}"
@@ -2004,7 +2016,7 @@ ${buildToolResultsText(toolResults)}
 
 THREAD FORMAT: Yanıtını "|||" ile ayırdığın 3 kısa mesaj olarak ver:
 Mesaj 1 — 💰 Piyasa durumu + fırsat özeti (3-4 madde)
-Mesaj 2 — 📋 Sektör dağılımı önerisi${budget ? ` (${budget.toLocaleString('tr-TR')} TL için)` : ''} + öne çıkan hisseler
+Mesaj 2 — 📋 Sektör dağılımı görünümü${budget ? ` (${budget.toLocaleString('tr-TR')} TL için)` : ''} + öne çıkan hisselerin veri özeti
 Mesaj 3 — ⚠️ Risk uyarısı + not${pendingNote}`;
     } else {
       userPromptContent = `Kullanıcı Sorusu: "${message}"
@@ -2016,7 +2028,9 @@ THREAD FORMAT: Yanıtını "|||" ile ayırdığın 2-3 kısa mesaj olarak ver. H
     }
 
     const systemPrompt = `Sen profesyonel bir BIST hisse analiz asistanısın. Türkçe yanıt ver.
-Yatırım TAVSİYESİ VERME, sadece ANALİZ yap. Emoji kullan ama abartma. Her mesaj maksimum 5 madde içersin.
+Yalnızca objektif, veri-temelli analiz yap. Yatırım tavsiyesi, öneri veya yönlendirme verme.
+Al/Sat/Tut gibi eylem çağrısı içeren ifadeler kullanma. "Sinyal" yerine "gösterge durumu" ifadesini tercih et.
+Emoji kullan ama abartma. Her mesaj maksimum 5 madde içersin.
 
 Matematiksel göstergeler varsa şu şekilde yorumla:
 - RSI < 30 = aşırı satım bölgesi | RSI > 70 = aşırı alım bölgesi
@@ -2026,7 +2040,7 @@ Matematiksel göstergeler varsa şu şekilde yorumla:
 - Fibonacci seviyeleri destek/direnç noktası olarak göster
 - Williams %R < -80 = aşırı satım | > -20 = aşırı alım
 - CCI < -100 = aşırı satım | > 100 = aşırı alım
-- Bileşik Sinyal (compositeSignal): birden fazla göstergenin ortalamasını yansıtır
+- Bileşik Durum (compositeSignal): birden fazla göstergenin ortalamasını yansıtır
 - OBV trendi: hacimle fiyat hareketi tutarlılığını gösterir
 
 Yanıtı MUTLAKA şu formatta döndür:
@@ -2038,7 +2052,8 @@ SORULAR: soru1 | soru2 | soru3
 📊 İlk mesaj içeriği ||| 🔍 İkinci mesaj içeriği ||| ⚠️ Üçüncü mesaj içeriği
 SORULAR: GARAN 3 ay sonraki fiyatı ne olur? | AKBNK ile karşılaştırır mısın? | Temettü verimi nedir?
 
-"SORULAR:" satırı her zaman son satır olmalı, 3 kısa Türkçe soru içermeli.`;
+"SORULAR:" satırı her zaman son satır olmalı, 3 kısa Türkçe soru içermeli.
+Thread mesajlarının birinde şu cümle aynen geçmeli: "${LEGAL_DISCLAIMER}"`;
 
     // Sanitize and build conversation history (avoids consecutive-role errors with Claude)
     const cleanHistory = sanitizeHistory(
@@ -2102,6 +2117,8 @@ SORULAR: GARAN 3 ay sonraki fiyatı ne olur? | AKBNK ile karşılaştırır mıs
         .filter((s: string) => s.length > 5);
       cleanText = rawText.replace(/\nSOROLAR:.+$|SORULAR:.+$/m, '').trim();
     }
+
+    cleanText = ensureThreadLegalDisclaimer(cleanText);
 
     // Split into thread messages on "|||"
     const messages = cleanText
