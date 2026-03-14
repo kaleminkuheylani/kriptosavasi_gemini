@@ -648,26 +648,28 @@ export default function StockDetailPage() {
 
 Format:
 1) Genel Görünüm
-2) Güçlü Sinyaller
-3) Riskler
-4) İzlenecek Seviyeler
+2) Göstergelerin Özeti
+3) Riskler ve Belirsizlikler
+4) İzlenecek Veri Seviyeleri
 
 Kurallar:
 - En fazla 12 satır
 - Maddeli ve sade yaz
 - Sadece verilen verilerden çıkarım yap
-- Yatırım tavsiyesi verme
+- Kesin hüküm verme
+- Al/Sat/Tut, öneri/tavsiye veya "sinyal" ifadesi kullanma
+- Son satıra şu ifadeyi aynen ekle: "Yasal Sorumluluk Notu: Bu içerik yalnızca bilgilendirme amaçlıdır. Verilecek tüm yatırım kararları ile doğabilecek hukuki ve mali sorumluluk tamamen kullanıcıya aittir."
 
 Hisse: ${stockDetail?.code ?? symbol}
 Fiyat: ${latestPrice}
 Günlük Değişim (%): ${stockDetail?.changePercent ?? 0}
 Zaman Dilimi: ${timeframe}
 
-Bileşik Sinyal: ${deepAnalysis.composite}
+Bileşik Durum Skoru: ${deepAnalysis.composite}
 Bull Skor: ${deepAnalysis.bull}
 Bear Skor: ${deepAnalysis.bear}
 
-MACD: ${deepAnalysis.macd?.value ?? '-'} | Sinyal: ${deepAnalysis.macd?.signal ?? '-'} | Hist: ${deepAnalysis.macd?.histogram ?? '-'} | Trend: ${deepAnalysis.macd?.trend ?? '-'}
+MACD: ${deepAnalysis.macd?.value ?? '-'} | Referans Hat: ${deepAnalysis.macd?.signal ?? '-'} | Hist: ${deepAnalysis.macd?.histogram ?? '-'} | Trend: ${deepAnalysis.macd?.trend ?? '-'}
 Stochastic %K: ${deepAnalysis.stochastic?.value ?? '-'} | Durum: ${deepAnalysis.stochastic?.signal ?? '-'}
 ATR: ${deepAnalysis.atr?.value ?? '-'} | ATR%: ${deepAnalysis.atr?.percent ?? '-'}
 Williams %R: ${deepAnalysis.williamsR?.value ?? '-'} | Durum: ${deepAnalysis.williamsR?.signal ?? '-'}
@@ -1058,7 +1060,7 @@ Low: ${deepAnalysis.fibonacci?.low ?? '-'}`;
                         : 'bg-slate-700 text-slate-200'
                     }
                   >
-                    Bilesik Sinyal: {deepAnalysis.composite.replaceAll('_', ' ')}
+                    Bilesik Durum: {deepAnalysis.composite.replaceAll('_', ' ')}
                   </Badge>
                   <Badge variant="secondary" className="bg-slate-800 text-slate-300">
                     Bull: {deepAnalysis.bull}
@@ -1146,6 +1148,9 @@ Low: ${deepAnalysis.fibonacci?.low ?? '-'}`;
                   <div className="rounded-lg border border-violet-700/50 bg-violet-900/15 p-3">
                     <p className="mb-2 text-sm font-medium text-violet-300">AI Derinlik Yorumu</p>
                     <p className="whitespace-pre-wrap text-sm text-slate-100">{deepAiComment}</p>
+                    <p className="mt-2 text-xs text-slate-400">
+                      Yasal Sorumluluk Notu: Bu içerik yalnızca bilgilendirme amaçlıdır. Verilecek tüm yatırım kararları ile doğabilecek hukuki ve mali sorumluluk tamamen kullanıcıya aittir.
+                    </p>
                   </div>
                 ) : null}
               </div>

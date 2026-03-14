@@ -1913,7 +1913,7 @@ export default function Home() {
                       <div className="space-y-4">
                         <div className="flex items-center gap-2 text-xs text-slate-500">
                           <Sparkles className="h-3.5 w-3.5 text-emerald-400"/>
-                          <span>AI tarafından oluşturuldu · Yatırım tavsiyesi değildir</span>
+                          <span>AI tarafından oluşturuldu · Yatırım tavsiyesi değildir · Hukuki ve mali sorumluluk kullanıcıya aittir</span>
                         </div>
                         <div className="bg-slate-800/30 rounded-2xl p-5 text-sm text-slate-300 leading-relaxed whitespace-pre-wrap border border-slate-700/40">
                           {detailAnalysis}
