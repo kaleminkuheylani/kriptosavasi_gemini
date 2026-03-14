@@ -200,6 +200,13 @@ const TOOLS = {
       sector:    'string - Sektör filtresi (opsiyonel)',
     },
   },
+  deep_mathematical_analysis: {
+    description: 'Hisse için kapsamlı matematiksel derinlik analizi yapar: MACD, Stochastic Oscillator, ATR (volatilite), Fibonacci seviyeleri, Williams %R, CCI, Momentum/ROC, Yıllıklaştırılmış Volatilite, OBV (hacim-bazlı akış) ve Bileşik Sinyal skoru hesaplar.',
+    parameters: {
+      symbol: 'string - Hisse kodu',
+      period: 'string - Veri periyodu 3M|6M|1Y (varsayılan: 6M)',
+    },
+  },
 };
 
 // Tools that require explicit user confirmation before execution
@@ -1098,7 +1105,7 @@ async function technicalIndicators(symbol: string, period: string = '3M') {
   try {
     const histResult = await getStockHistory(symbol.toUpperCase(), period) as {
       success: boolean;
-      data?: Array<{ close: number }>;
+      data?: Array<{ close: number; high: number; low: number; volume: number }>;
     };
 
     if (!histResult.success || !histResult.data || histResult.data.length < 20) {
@@ -1106,11 +1113,211 @@ async function technicalIndicators(symbol: string, period: string = '3M') {
     }
 
     const closes = histResult.data.map(d => d.close);
-    const indicators = calcTechnicalIndicators(closes);
+    const highs = histResult.data.map(d => d.high);
+    const lows = histResult.data.map(d => d.low);
+    const volumes = histResult.data.map(d => d.volume);
 
+    const indicators = calcTechnicalIndicators(closes);
     if (!indicators) return { success: false, error: 'Gösterge hesaplanamadı' };
 
-    return { success: true, symbol: symbol.toUpperCase(), period, data: indicators };
+    const deep = calcDeepMathIndicators(closes, highs, lows, volumes);
+
+    return { success: true, symbol: symbol.toUpperCase(), period, data: { ...indicators, ...deep } };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+// ─── Deep Mathematical Analysis Functions ──────────────────────────────────────
+
+function calcEMA(data: number[], period: number): number[] {
+  const k = 2 / (period + 1);
+  const ema = [data[0]];
+  for (let i = 1; i < data.length; i++) {
+    ema.push(data[i] * k + ema[i - 1] * (1 - k));
+  }
+  return ema;
+}
+
+function calcMACDIndicator(closes: number[]) {
+  if (closes.length < 35) return null;
+  const ema12 = calcEMA(closes, 12);
+  const ema26 = calcEMA(closes, 26);
+  const macdLine = ema12.map((v, i) => v - ema26[i]);
+  const signalLine = calcEMA(macdLine.slice(25), 9);
+  const lastMACD = macdLine[macdLine.length - 1];
+  const lastSignal = signalLine[signalLine.length - 1];
+  const prevMACD = macdLine[macdLine.length - 2];
+  const prevSignal = signalLine[signalLine.length - 2];
+  const histogram = lastMACD - lastSignal;
+  let crossSignal: string | null = null;
+  if (prevMACD < prevSignal && lastMACD > lastSignal) crossSignal = 'BULLISH_KESIŞIM';
+  else if (prevMACD > prevSignal && lastMACD < lastSignal) crossSignal = 'BEARISH_KESIŞIM';
+  return {
+    macdLine: +lastMACD.toFixed(3),
+    signalLine: +lastSignal.toFixed(3),
+    histogram: +histogram.toFixed(3),
+    trend: lastMACD > lastSignal ? 'YUKARI' : 'AŞAĞI',
+    crossSignal,
+  };
+}
+
+function calcStochasticIndicator(highs: number[], lows: number[], closes: number[], period = 14) {
+  if (closes.length < period) return null;
+  const highestHigh = Math.max(...highs.slice(-period));
+  const lowestLow = Math.min(...lows.slice(-period));
+  const lastClose = closes[closes.length - 1];
+  const k = highestHigh === lowestLow ? 50 : +((lastClose - lowestLow) / (highestHigh - lowestLow) * 100).toFixed(2);
+  let signal = 'NÖTR';
+  if (k < 20) signal = 'AŞIRI SATIM';
+  else if (k > 80) signal = 'AŞIRI ALIM';
+  return { k, signal };
+}
+
+function calcATRIndicator(highs: number[], lows: number[], closes: number[], period = 14) {
+  if (closes.length < period + 1) return null;
+  const trueRanges: number[] = [];
+  for (let i = 1; i < closes.length; i++) {
+    const tr = Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1]));
+    trueRanges.push(tr);
+  }
+  const atr = trueRanges.slice(-period).reduce((a, b) => a + b, 0) / period;
+  const lastClose = closes[closes.length - 1];
+  return { atr: +atr.toFixed(2), atrPercent: +(atr / lastClose * 100).toFixed(2) };
+}
+
+function calcFibonacciLevels(closes: number[]) {
+  const lookback = Math.min(closes.length, 90);
+  const high = Math.max(...closes.slice(-lookback));
+  const low = Math.min(...closes.slice(-lookback));
+  const diff = high - low;
+  return {
+    high: +high.toFixed(2),
+    low: +low.toFixed(2),
+    r236: +(high - diff * 0.236).toFixed(2),
+    r382: +(high - diff * 0.382).toFixed(2),
+    r500: +(high - diff * 0.500).toFixed(2),
+    r618: +(high - diff * 0.618).toFixed(2),
+    r786: +(high - diff * 0.786).toFixed(2),
+  };
+}
+
+function calcWilliamsR(highs: number[], lows: number[], closes: number[], period = 14) {
+  if (closes.length < period) return null;
+  const highestHigh = Math.max(...highs.slice(-period));
+  const lowestLow = Math.min(...lows.slice(-period));
+  const lastClose = closes[closes.length - 1];
+  const r = highestHigh === lowestLow ? -50 : +((highestHigh - lastClose) / (highestHigh - lowestLow) * -100).toFixed(2);
+  let signal = 'NÖTR';
+  if (r > -20) signal = 'AŞIRI ALIM';
+  else if (r < -80) signal = 'AŞIRI SATIM';
+  return { value: r, signal };
+}
+
+function calcCCIIndicator(highs: number[], lows: number[], closes: number[], period = 20) {
+  if (closes.length < period) return null;
+  const typicals = Array.from({ length: period }, (_, i) => {
+    const idx = closes.length - period + i;
+    return (highs[idx] + lows[idx] + closes[idx]) / 3;
+  });
+  const mean = typicals.reduce((a, b) => a + b, 0) / period;
+  const meanDev = typicals.reduce((s, t) => s + Math.abs(t - mean), 0) / period;
+  const lastTypical = (highs[highs.length - 1] + lows[lows.length - 1] + closes[closes.length - 1]) / 3;
+  const cci = meanDev === 0 ? 0 : +((lastTypical - mean) / (0.015 * meanDev)).toFixed(2);
+  let signal = 'NÖTR';
+  if (cci > 100) signal = 'AŞIRI ALIM';
+  else if (cci < -100) signal = 'AŞIRI SATIM';
+  return { value: cci, signal };
+}
+
+function calcMomentumROC(closes: number[], period = 10) {
+  if (closes.length < period + 1) return null;
+  const roc = +((closes[closes.length - 1] - closes[closes.length - 1 - period]) / closes[closes.length - 1 - period] * 100).toFixed(2);
+  return { roc, trend: roc > 0 ? 'POZİTİF' : 'NEGATİF' };
+}
+
+function calcAnnualizedVolatility(closes: number[]) {
+  if (closes.length < 2) return null;
+  const returns = closes.slice(1).map((c, i) => Math.log(c / closes[i]));
+  const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
+  const variance = returns.reduce((s, r) => s + Math.pow(r - mean, 2), 0) / returns.length;
+  const annualVol = +(Math.sqrt(variance) * Math.sqrt(252) * 100).toFixed(2);
+  let level = 'ORTA';
+  if (annualVol < 20) level = 'DÜŞÜK';
+  else if (annualVol > 50) level = 'YÜKSEK';
+  return { annualVolatility: annualVol, level };
+}
+
+function calcOBVIndicator(closes: number[], volumes: number[]) {
+  if (closes.length < 2) return null;
+  let obv = 0;
+  const obvSeries: number[] = [0];
+  for (let i = 1; i < closes.length; i++) {
+    if (closes[i] > closes[i - 1]) obv += volumes[i];
+    else if (closes[i] < closes[i - 1]) obv -= volumes[i];
+    obvSeries.push(obv);
+  }
+  // OBV EMA trend
+  const recentOBV = obvSeries.slice(-20);
+  const obvTrend = recentOBV[recentOBV.length - 1] > recentOBV[0] ? 'POZİTİF' : 'NEGATİF';
+  return { obv: Math.round(obv), trend: obvTrend };
+}
+
+function calcDeepMathIndicators(closes: number[], highs: number[], lows: number[], volumes: number[]) {
+  const macd = calcMACDIndicator(closes);
+  const stochastic = calcStochasticIndicator(highs, lows, closes);
+  const atr = calcATRIndicator(highs, lows, closes);
+  const fibonacci = calcFibonacciLevels(closes);
+  const williamsR = calcWilliamsR(highs, lows, closes);
+  const cci = calcCCIIndicator(highs, lows, closes);
+  const momentum = calcMomentumROC(closes);
+  const volatility = calcAnnualizedVolatility(closes);
+  const obv = calcOBVIndicator(closes, volumes);
+
+  // Composite signal scoring
+  let bullSignals = 0, bearSignals = 0;
+  if (macd?.trend === 'YUKARI') bullSignals++; else if (macd?.trend === 'AŞAĞI') bearSignals++;
+  if (stochastic?.signal === 'AŞIRI SATIM') bullSignals++; else if (stochastic?.signal === 'AŞIRI ALIM') bearSignals++;
+  if (williamsR?.signal === 'AŞIRI SATIM') bullSignals++; else if (williamsR?.signal === 'AŞIRI ALIM') bearSignals++;
+  if (cci?.signal === 'AŞIRI SATIM') bullSignals++; else if (cci?.signal === 'AŞIRI ALIM') bearSignals++;
+  if (momentum?.trend === 'POZİTİF') bullSignals++; else if (momentum?.trend === 'NEGATİF') bearSignals++;
+  if (obv?.trend === 'POZİTİF') bullSignals++; else if (obv?.trend === 'NEGATİF') bearSignals++;
+
+  let compositeSignal = 'NÖTR';
+  if (bullSignals >= 4) compositeSignal = 'GÜÇLÜ ALIM';
+  else if (bullSignals >= 3) compositeSignal = 'ALIM';
+  else if (bearSignals >= 4) compositeSignal = 'GÜÇLÜ SATIM';
+  else if (bearSignals >= 3) compositeSignal = 'SATIM';
+
+  return { macd, stochastic, atr, fibonacci, williamsR, cci, momentum, volatility, obv, compositeSignal, bullSignals, bearSignals };
+}
+
+async function deepMathematicalAnalysis(symbol: string, period: string = '6M') {
+  try {
+    const histResult = await getStockHistory(symbol.toUpperCase(), period) as {
+      success: boolean;
+      data?: Array<{ close: number; high: number; low: number; volume: number }>;
+    };
+
+    if (!histResult.success || !histResult.data || histResult.data.length < 20) {
+      return { success: false, error: 'Yeterli veri yok (min 20 gün gerekli)' };
+    }
+
+    const closes = histResult.data.map(d => d.close);
+    const highs = histResult.data.map(d => d.high);
+    const lows = histResult.data.map(d => d.low);
+    const volumes = histResult.data.map(d => d.volume);
+
+    const base = calcTechnicalIndicators(closes);
+    const deep = calcDeepMathIndicators(closes, highs, lows, volumes);
+
+    return {
+      success: true,
+      symbol: symbol.toUpperCase(),
+      period,
+      dataPoints: closes.length,
+      data: { ...base, ...deep },
+    };
   } catch (error) {
     return { success: false, error: String(error) };
   }
@@ -1247,6 +1454,9 @@ async function executeTool(toolName: string, params: Record<string, unknown>, us
       break;
     case 'stock_screener':
       result = await stockScreener(params as { minChange?: number; maxChange?: number; minVolume?: number; sector?: string });
+      break;
+    case 'deep_mathematical_analysis':
+      result = await deepMathematicalAnalysis(params.symbol as string, params.period as string | undefined);
       break;
     default:
       result = { success: false, error: `Bilinmeyen tool: ${toolName}` };
@@ -1385,8 +1595,17 @@ function selectToolsForQuery(message: string): {
     return { tools, params, queryType: 'comparison', queryMeta: { symbols } };
   }
 
+  // === DEEP MATHEMATICAL ANALYSIS ===
+  if ((lowerMessage.includes('derin analiz') || lowerMessage.includes('matematiksel') || lowerMessage.includes('macd') || lowerMessage.includes('fibonacci') || lowerMessage.includes('stochastic') || lowerMessage.includes('williams') || lowerMessage.includes('atr') || lowerMessage.includes('obv') || lowerMessage.includes('cci')) && symbols.length > 0) {
+    tools.push('deep_mathematical_analysis');
+    params['deep_mathematical_analysis'] = { symbol: symbols[0], period: '6M' };
+    tools.push('get_stock_price');
+    params[`get_stock_price_${symbols[0]}`] = { symbol: symbols[0] };
+    return { tools, params, queryType: 'deep_math', queryMeta: { symbols } };
+  }
+
   // === TECHNICAL INDICATORS ===
-  if ((lowerMessage.includes('rsi') || lowerMessage.includes('bollinger') || lowerMessage.includes('teknik gösterge') || lowerMessage.includes('sma') || lowerMessage.includes('macd')) && symbols.length > 0) {
+  if ((lowerMessage.includes('rsi') || lowerMessage.includes('bollinger') || lowerMessage.includes('teknik gösterge') || lowerMessage.includes('sma')) && symbols.length > 0) {
     tools.push('technical_indicators');
     params['technical_indicators'] = { symbol: symbols[0], period: '3M' };
     tools.push('get_stock_price');
@@ -1804,6 +2023,18 @@ THREAD FORMAT: Yanıtını "|||" ile ayırdığın 2-3 kısa mesaj olarak ver. H
 
     const systemPrompt = `Sen profesyonel bir BIST hisse analiz asistanısın. Türkçe yanıt ver.
 Yatırım TAVSİYESİ VERME, sadece ANALİZ yap. Emoji kullan ama abartma. Her mesaj maksimum 5 madde içersin.
+
+Matematiksel göstergeler varsa şu şekilde yorumla:
+- RSI < 30 = aşırı satım bölgesi | RSI > 70 = aşırı alım bölgesi
+- MACD histogramı pozitif = yükseliş baskısı | negatif = düşüş baskısı
+- Stochastic %K < 20 = aşırı satım | %K > 80 = aşırı alım
+- ATR% = günlük volatilite tahmini olarak kullan
+- Fibonacci seviyeleri destek/direnç noktası olarak göster
+- Williams %R < -80 = aşırı satım | > -20 = aşırı alım
+- CCI < -100 = aşırı satım | > 100 = aşırı alım
+- Bileşik Sinyal (compositeSignal): birden fazla göstergenin ortalamasını yansıtır
+- OBV trendi: hacimle fiyat hareketi tutarlılığını gösterir
+
 Yanıtı MUTLAKA şu formatta döndür:
 
 [thread mesajları "|||" ile ayrılmış]

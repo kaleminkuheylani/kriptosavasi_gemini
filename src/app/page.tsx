@@ -147,6 +147,7 @@ const TOOLS = [
   { id: 'technical_indicators', name: 'RSI/Bollinger', icon: LineChartIcon, color: 'text-indigo-400' },
   { id: 'get_economic_calendar', name: 'Ekonomi Takvimi', icon: Building2, color: 'text-teal-400' },
   { id: 'stock_screener', name: 'Hisse Tarayıcı', icon: Scan, color: 'text-rose-400' },
+  { id: 'deep_mathematical_analysis', name: 'Derin Matematik', icon: Sparkles, color: 'text-violet-300' },
 ];
 
 // Tool categories for UI selector
@@ -183,6 +184,14 @@ const TOOL_CATEGORIES = [
     activeClass: 'bg-pink-600/20 border-pink-500 text-pink-300',
     inactiveClass: 'border-slate-700 text-slate-500',
     tools: ['scan_market', 'get_top_gainers', 'get_top_losers', 'stock_screener'],
+  },
+  {
+    id: 'deepmath',
+    label: 'Derin Analiz',
+    color: 'violet',
+    activeClass: 'bg-violet-600/20 border-violet-500 text-violet-300',
+    inactiveClass: 'border-slate-700 text-slate-500',
+    tools: ['technical_indicators', 'analyze_chart_image', 'deep_mathematical_analysis'],
   },
 ];
 
@@ -1601,7 +1610,7 @@ export default function Home() {
                 </div>
                 <div>
                   <DialogTitle className="text-lg">AI Finans Asistani</DialogTitle>
-                  <p className="text-xs text-slate-400">15 arac ile desteklenmistir</p>
+                  <p className="text-xs text-slate-400">21 araç · Matematiksel Derin Analiz</p>
                 </div>
               </div>
               <div className="flex gap-2">
@@ -1641,69 +1650,92 @@ export default function Home() {
             </div>
           </DialogHeader>
 
-          {/* Tool Category Selector */}
-          <div className="py-2 border-b border-slate-800">
-            <button
-              onClick={() => setToolSelectorOpen(v => !v)}
-              className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 transition-colors mb-1"
-            >
-              <Zap className="h-3 w-3" />
-              Araç Kategorileri
-              <span className="text-slate-600 ml-0.5">{toolSelectorOpen ? '▲' : '▼'}</span>
-            </button>
-            {toolSelectorOpen && (
-              <div className="flex flex-wrap gap-1.5 mt-1.5">
-                {TOOL_CATEGORIES.map(cat => {
-                  const active = enabledCategories.has(cat.id);
+          {/* Tool Panel - Always Visible */}
+          <div className="border-b border-slate-800 bg-slate-950/40">
+            {/* Category Toggle Row */}
+            <div className="flex items-center gap-1 px-3 pt-2 pb-1 overflow-x-auto scrollbar-none">
+              <Zap className="h-3 w-3 text-slate-500 shrink-0 mr-0.5" />
+              {TOOL_CATEGORIES.map(cat => {
+                const active = enabledCategories.has(cat.id);
+                const catToolCount = cat.tools.length;
+                return (
+                  <button
+                    key={cat.id}
+                    onClick={() => {
+                      setEnabledCategories(prev => {
+                        const next = new Set(prev);
+                        if (next.has(cat.id)) {
+                          if (next.size > 1) next.delete(cat.id);
+                        } else {
+                          next.add(cat.id);
+                        }
+                        return next;
+                      });
+                    }}
+                    className={`flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md border whitespace-nowrap transition-all shrink-0 ${
+                      active ? cat.activeClass : cat.inactiveClass
+                    }`}
+                  >
+                    {active && <span className="text-[9px]">✓</span>}
+                    {cat.label}
+                    <span className="opacity-50">({catToolCount})</span>
+                  </button>
+                );
+              })}
+              <button
+                onClick={() => setEnabledCategories(new Set(TOOL_CATEGORIES.map(c => c.id)))}
+                className="text-[11px] px-2 py-0.5 rounded-md border border-slate-700 text-slate-500 hover:text-slate-300 hover:border-slate-500 transition-colors shrink-0"
+              >
+                Tümü
+              </button>
+            </div>
+
+            {/* Tool Grid - All tools visible */}
+            <div className="flex flex-wrap gap-1 px-3 py-2">
+              {TOOL_CATEGORIES.flatMap(cat =>
+                cat.tools.map(toolId => {
+                  const tool = TOOLS.find(t => t.id === toolId);
+                  if (!tool) return null;
+                  const Icon = tool.icon;
+                  const isEnabled = enabledCategories.has(cat.id);
+                  const wasUsed = lastToolsUsed.includes(toolId);
+                  const isRunning = chatLoading && wasUsed;
+
                   return (
-                    <button
-                      key={cat.id}
-                      onClick={() => {
-                        setEnabledCategories(prev => {
-                          const next = new Set(prev);
-                          if (next.has(cat.id)) {
-                            if (next.size > 1) next.delete(cat.id); // keep at least 1
-                          } else {
-                            next.add(cat.id);
-                          }
-                          return next;
-                        });
-                      }}
-                      className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
-                        active ? cat.activeClass : cat.inactiveClass
+                    <div
+                      key={`${cat.id}-${toolId}`}
+                      title={tool.name}
+                      className={`flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border transition-all ${
+                        isRunning
+                          ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300 animate-pulse'
+                          : wasUsed
+                          ? `bg-slate-700/50 border-slate-600/60 ${tool.color}`
+                          : isEnabled
+                          ? 'bg-slate-800/60 border-slate-700/40 text-slate-500 hover:text-slate-300 hover:border-slate-600'
+                          : 'bg-slate-900/30 border-slate-800/30 text-slate-700 opacity-40'
                       }`}
                     >
-                      {cat.label}
-                      {active && <span className="ml-1 opacity-60">✓</span>}
-                    </button>
+                      <Icon className="h-2.5 w-2.5 shrink-0" />
+                      <span className="truncate max-w-[72px]">{tool.name}</span>
+                    </div>
                   );
-                })}
-                <button
-                  onClick={() => setEnabledCategories(new Set(TOOL_CATEGORIES.map(c => c.id)))}
-                  className="text-xs px-2.5 py-1 rounded-full border border-slate-700 text-slate-500 hover:text-slate-300 transition-colors"
-                >
-                  Tümü
-                </button>
+                }).filter(Boolean)
+              )}
+            </div>
+
+            {/* Live tool execution status */}
+            {chatLoading && (
+              <div className="flex items-center gap-1.5 px-3 pb-2">
+                <Loader2 className="h-3 w-3 text-emerald-400 animate-spin shrink-0" />
+                <span className="text-[10px] text-emerald-400">Araçlar çalışıyor...</span>
+                {lastToolsUsed.length > 0 && (
+                  <span className="text-[10px] text-slate-500">
+                    ({lastToolsUsed.map(id => TOOLS.find(t => t.id === id)?.name).filter(Boolean).join(', ')})
+                  </span>
+                )}
               </div>
             )}
           </div>
-
-          {/* Tools Used */}
-          {lastToolsUsed.length > 0 && (
-            <div className="flex flex-wrap gap-1 py-2">
-              {lastToolsUsed.map((toolId) => {
-                const tool = TOOLS.find(t => t.id === toolId);
-                if (!tool) return null;
-                const Icon = tool.icon;
-                return (
-                  <Badge key={toolId} variant="outline" className={`border-slate-700 ${tool.color}`}>
-                    <Icon className="h-3 w-3 mr-1" />
-                    {tool.name}
-                  </Badge>
-                );
-              })}
-            </div>
-          )}
 
           {/* Chat Messages - Scrollable div instead of ScrollArea */}
           <div className="flex-1 min-h-0 overflow-y-auto">
@@ -1716,6 +1748,7 @@ export default function Home() {
                     {[
                       'Gunun yukselen hisseleri',
                       'THYAO hisse analizi',
+                      'THYAO derin matematik analizi',
                       'Portfoyumu analiz et',
                       'THYAO ve GARAN karsilastir',
                       'ASELS RSI hesapla',
