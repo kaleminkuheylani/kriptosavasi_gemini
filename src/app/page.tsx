@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -206,6 +207,7 @@ const TABS = [
 
 export default function Home() {
   const { toast } = useToast();
+  const router = useRouter();
   
   // State
   const [stocks, setStocks] = useState<Stock[]>([]);
@@ -235,7 +237,6 @@ export default function Home() {
   // Detail Modal
   const [detailOpen, setDetailOpen] = useState(false);
   const [selectedStock, setSelectedStock] = useState<Stock | null>(null);
-  const [stockDetail, setStockDetail] = useState<Stock | null>(null);
   const [historicalData, setHistoricalData] = useState<HistoricalData[]>([]);
   const [chartTimeframe, setChartTimeframe] = useState('1M');
   const [detailLoading, setDetailLoading] = useState(false);
@@ -429,23 +430,9 @@ export default function Home() {
     }
   };
 
-  const openStockDetail = async (stock: Stock) => {
+  const openStockDetail = (stock: Stock) => {
     setSelectedStock(stock);
-    setDetailOpen(true);
-    setDetailLoading(true);
-    
-    try {
-      const response = await fetch(`/api/stocks/${stock.code}?time=${chartTimeframe}`);
-      const data = await response.json();
-      if (data.success) {
-        setStockDetail(data.data.detail);
-        setHistoricalData(data.data.historical);
-      }
-    } catch {
-      console.error('Detail fetch error');
-    } finally {
-      setDetailLoading(false);
-    }
+    router.push(`/stocks/${stock.code}`);
   };
 
   const fetchHistoricalData = async (time: string) => {
