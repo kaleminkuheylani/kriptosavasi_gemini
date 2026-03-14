@@ -340,6 +340,8 @@ export default function StockDetailPage() {
   const [commentsLoading, setCommentsLoading] = useState(false);
   const [commentInput, setCommentInput] = useState('');
   const [commentSubmitting, setCommentSubmitting] = useState(false);
+  const [deepAiLoading, setDeepAiLoading] = useState(false);
+  const [deepAiComment, setDeepAiComment] = useState<string | null>(null);
 
   const fetchWatchlist = useCallback(async () => {
     try {
@@ -466,6 +468,11 @@ export default function StockDetailPage() {
     fetchCurrentUser();
     fetchComments();
   }, [fetchComments, fetchCurrentUser]);
+
+  useEffect(() => {
+    // Avoid showing stale AI comment when symbol/timeframe changes
+    setDeepAiComment(null);
+  }, [symbol, timeframe]);
 
   const isInWatchlist = useMemo(
     () => watchlist.some(item => item.symbol.toUpperCase() === symbol),
@@ -630,6 +637,71 @@ export default function StockDetailPage() {
         description: error instanceof Error ? error.message : 'Yorum silinemedi',
         variant: 'destructive',
       });
+    }
+  };
+
+  const handleDeepAiCommentary = async () => {
+    if (!deepAnalysis) return;
+    setDeepAiLoading(true);
+    try {
+      const prompt = `Aşağıdaki hisse verilerine göre Türkçe, kısa ve net bir "derinlik analizi yorumu" üret.
+
+Format:
+1) Genel Görünüm
+2) Güçlü Sinyaller
+3) Riskler
+4) İzlenecek Seviyeler
+
+Kurallar:
+- En fazla 12 satır
+- Maddeli ve sade yaz
+- Sadece verilen verilerden çıkarım yap
+- Yatırım tavsiyesi verme
+
+Hisse: ${stockDetail?.code ?? symbol}
+Fiyat: ${latestPrice}
+Günlük Değişim (%): ${stockDetail?.changePercent ?? 0}
+Zaman Dilimi: ${timeframe}
+
+Bileşik Sinyal: ${deepAnalysis.composite}
+Bull Skor: ${deepAnalysis.bull}
+Bear Skor: ${deepAnalysis.bear}
+
+MACD: ${deepAnalysis.macd?.value ?? '-'} | Sinyal: ${deepAnalysis.macd?.signal ?? '-'} | Hist: ${deepAnalysis.macd?.histogram ?? '-'} | Trend: ${deepAnalysis.macd?.trend ?? '-'}
+Stochastic %K: ${deepAnalysis.stochastic?.value ?? '-'} | Durum: ${deepAnalysis.stochastic?.signal ?? '-'}
+ATR: ${deepAnalysis.atr?.value ?? '-'} | ATR%: ${deepAnalysis.atr?.percent ?? '-'}
+Williams %R: ${deepAnalysis.williamsR?.value ?? '-'} | Durum: ${deepAnalysis.williamsR?.signal ?? '-'}
+CCI: ${deepAnalysis.cci?.value ?? '-'} | Durum: ${deepAnalysis.cci?.signal ?? '-'}
+ROC(10): ${deepAnalysis.roc?.value ?? '-'} | Trend: ${deepAnalysis.roc?.trend ?? '-'}
+OBV: ${deepAnalysis.obv?.value ?? '-'} | Trend: ${deepAnalysis.obv?.trend ?? '-'}
+
+Fibonacci:
+High: ${deepAnalysis.fibonacci?.high ?? '-'}
+0.236: ${deepAnalysis.fibonacci?.r236 ?? '-'}
+0.382: ${deepAnalysis.fibonacci?.r382 ?? '-'}
+0.500: ${deepAnalysis.fibonacci?.r500 ?? '-'}
+0.618: ${deepAnalysis.fibonacci?.r618 ?? '-'}
+Low: ${deepAnalysis.fibonacci?.low ?? '-'}`;
+
+      const response = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol, customPrompt: prompt }),
+      });
+      const data = await response.json();
+      if (!data.success) {
+        throw new Error(data.error || 'AI yorum olusturulamadi');
+      }
+
+      setDeepAiComment((data.data?.analysis as string) || 'AI yorumu alinamadi.');
+    } catch (error) {
+      toast({
+        title: 'Hata',
+        description: error instanceof Error ? error.message : 'AI yorum olusturulamadi',
+        variant: 'destructive',
+      });
+    } finally {
+      setDeepAiLoading(false);
     }
   };
 
@@ -954,11 +1026,20 @@ export default function StockDetailPage() {
         </div>
 
         <Card className="border-slate-800 bg-slate-900">
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between gap-3">
             <CardTitle className="flex items-center gap-2">
               <Sparkles className="h-5 w-5 text-violet-400" />
               Derinlik Analiz Araci (Ajan Benzeri)
             </CardTitle>
+            <Button
+              size="sm"
+              className="bg-violet-600 hover:bg-violet-700 text-white"
+              onClick={handleDeepAiCommentary}
+              disabled={!deepAnalysis || deepAiLoading}
+            >
+              {deepAiLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+              AI Yorumla
+            </Button>
           </CardHeader>
           <CardContent>
             {deepAnalysis ? (
@@ -1060,6 +1141,13 @@ export default function StockDetailPage() {
                     </div>
                   </div>
                 </div>
+
+                {deepAiComment ? (
+                  <div className="rounded-lg border border-violet-700/50 bg-violet-900/15 p-3">
+                    <p className="mb-2 text-sm font-medium text-violet-300">AI Derinlik Yorumu</p>
+                    <p className="whitespace-pre-wrap text-sm text-slate-100">{deepAiComment}</p>
+                  </div>
+                ) : null}
               </div>
             ) : (
               <p className="text-sm text-slate-400">
