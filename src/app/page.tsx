@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -17,6 +18,10 @@ import {
   ResponsiveContainer,
   BarChart,
   Bar,
+  AreaChart,
+  Area,
+  ComposedChart,
+  ReferenceLine,
 } from 'recharts';
 import {
   Search,
@@ -55,6 +60,10 @@ import {
   LayoutDashboard,
   List,
   Users,
+  Activity,
+  Newspaper,
+  Target,
+  Info,
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
@@ -206,6 +215,7 @@ const TABS = [
 
 export default function Home() {
   const { toast } = useToast();
+  const router = useRouter();
   
   // State
   const [stocks, setStocks] = useState<Stock[]>([]);
@@ -235,10 +245,12 @@ export default function Home() {
   // Detail Modal
   const [detailOpen, setDetailOpen] = useState(false);
   const [selectedStock, setSelectedStock] = useState<Stock | null>(null);
-  const [stockDetail, setStockDetail] = useState<Stock | null>(null);
   const [historicalData, setHistoricalData] = useState<HistoricalData[]>([]);
   const [chartTimeframe, setChartTimeframe] = useState('1M');
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailTab, setDetailTab] = useState<'grafik' | 'teknik' | 'ai' | 'ozet'>('grafik');
+  const [detailAnalysis, setDetailAnalysis] = useState<string | null>(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
   
   // AI Agent
   const [agentOpen, setAgentOpen] = useState(false);
@@ -429,23 +441,9 @@ export default function Home() {
     }
   };
 
-  const openStockDetail = async (stock: Stock) => {
+  const openStockDetail = (stock: Stock) => {
     setSelectedStock(stock);
-    setDetailOpen(true);
-    setDetailLoading(true);
-    
-    try {
-      const response = await fetch(`/api/stocks/${stock.code}?time=${chartTimeframe}`);
-      const data = await response.json();
-      if (data.success) {
-        setStockDetail(data.data.detail);
-        setHistoricalData(data.data.historical);
-      }
-    } catch {
-      console.error('Detail fetch error');
-    } finally {
-      setDetailLoading(false);
-    }
+    router.push(`/stocks/${stock.code}`);
   };
 
   const fetchHistoricalData = async (time: string) => {
@@ -859,6 +857,110 @@ export default function Home() {
   const formatNumber = (num: number, decimals = 2) => {
     return num.toLocaleString('tr-TR', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
   };
+
+  // Derived chart data: price area + SMA20/SMA50 overlays
+  const chartData = useMemo(() => {
+    return historicalData.map((d, i, arr) => {
+      const sma20 = i >= 19
+        ? +(arr.slice(i - 19, i + 1).reduce((s, x) => s + x.close, 0) / 20).toFixed(2)
+        : null;
+      const sma50 = i >= 49
+        ? +(arr.slice(i - 49, i + 1).reduce((s, x) => s + x.close, 0) / 50).toFixed(2)
+        : null;
+      return { ...d, sma20, sma50 };
+    });
+  }, [historicalData]);
+
+  // Client-side technical indicators from historicalData
+  const techData = useMemo(() => {
+    if (historicalData.length < 15) return null;
+    const closes = historicalData.map(d => d.close);
+    const highs  = historicalData.map(d => d.high);
+    const lows   = historicalData.map(d => d.low);
+    const lastClose = closes[closes.length - 1];
+
+    // RSI (14)
+    const changes = closes.slice(1).map((c, i) => c - closes[i]);
+    const recent14 = changes.slice(-14);
+    const avgGain = recent14.filter(c => c > 0).reduce((a, b) => a + b, 0) / 14;
+    const avgLoss = recent14.filter(c => c < 0).map(c => Math.abs(c)).reduce((a, b) => a + b, 0) / 14;
+    const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+    const rsi = +(100 - 100 / (1 + rs)).toFixed(1);
+
+    // SMA 20 / 50
+    const sma20 = closes.length >= 20 ? +(closes.slice(-20).reduce((a, b) => a + b, 0) / 20).toFixed(2) : null;
+    const sma50 = closes.length >= 50 ? +(closes.slice(-50).reduce((a, b) => a + b, 0) / 50).toFixed(2) : null;
+
+    // Bollinger Bands (20, 2σ)
+    let bb: { upper: number; middle: number; lower: number } | null = null;
+    if (closes.length >= 20) {
+      const mean = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+      const std = Math.sqrt(closes.slice(-20).reduce((s, c) => s + (c - mean) ** 2, 0) / 20);
+      bb = { upper: +(mean + 2 * std).toFixed(2), middle: +mean.toFixed(2), lower: +(mean - 2 * std).toFixed(2) };
+    }
+
+    // MACD (12, 26, 9)
+    let macd: { value: number; signal: number; histogram: number; trend: string } | null = null;
+    if (closes.length >= 35) {
+      const ema = (arr: number[], p: number) => {
+        const k = 2 / (p + 1);
+        return arr.reduce((acc, v, i) => { acc.push(i === 0 ? v : v * k + acc[i - 1] * (1 - k)); return acc; }, [] as number[]);
+      };
+      const e12 = ema(closes, 12), e26 = ema(closes, 26);
+      const macdLine = e12.map((v, i) => v - e26[i]);
+      const sigLine = ema(macdLine.slice(25), 9);
+      const lm = macdLine[macdLine.length - 1], ls = sigLine[sigLine.length - 1];
+      macd = { value: +lm.toFixed(3), signal: +ls.toFixed(3), histogram: +(lm - ls).toFixed(3), trend: lm > ls ? 'YUKARI' : 'AŞAĞI' };
+    }
+
+    // Stochastic %K (14)
+    const stochK = (() => {
+      const hh = Math.max(...highs.slice(-14)), ll = Math.min(...lows.slice(-14));
+      return hh === ll ? 50 : +((lastClose - ll) / (hh - ll) * 100).toFixed(1);
+    })();
+
+    // ATR (14)
+    const atr = (() => {
+      if (closes.length < 15) return null;
+      const trs = closes.slice(1).map((c, i) =>
+        Math.max(highs[i + 1] - lows[i + 1], Math.abs(highs[i + 1] - closes[i]), Math.abs(lows[i + 1] - closes[i]))
+      );
+      const val = trs.slice(-14).reduce((a, b) => a + b, 0) / 14;
+      return { value: +val.toFixed(2), percent: +(val / lastClose * 100).toFixed(2) };
+    })();
+
+    // Fibonacci (90-day lookback)
+    const fib = (() => {
+      const look = closes.slice(-90);
+      const h = Math.max(...look), l = Math.min(...look), d = h - l;
+      return { high: +h.toFixed(2), low: +l.toFixed(2), r236: +(h - d * 0.236).toFixed(2), r382: +(h - d * 0.382).toFixed(2), r500: +(h - d * 0.5).toFixed(2), r618: +(h - d * 0.618).toFixed(2) };
+    })();
+
+    // Signal
+    let signal = 'NÖTR';
+    if (rsi < 30 && bb && lastClose <= bb.lower) signal = 'GÜÇLÜ ALIM';
+    else if (rsi < 40) signal = 'ALIM';
+    else if (rsi > 70 && bb && lastClose >= bb.upper) signal = 'GÜÇLÜ SATIM';
+    else if (rsi > 60) signal = 'SATIM';
+
+    return { rsi, sma20, sma50, bb, macd, stochK, atr, fib, signal, lastClose };
+  }, [historicalData]);
+
+  // Fetch AI analysis from /api/analyze
+  const fetchAIAnalysis = useCallback(async (symbol: string) => {
+    setAnalysisLoading(true);
+    try {
+      const resp = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol }),
+      });
+      const data = await resp.json();
+      if (data.success) setDetailAnalysis(data.data.analysis);
+    } catch { /* ignore */ } finally {
+      setAnalysisLoading(false);
+    }
+  }, []);
 
   const getCurrentPrice = (symbol: string): Stock | undefined => stocks.find(s => s.code === symbol);
 
@@ -1431,168 +1533,502 @@ export default function Home() {
 
       {/* Stock Detail Modal */}
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
-        <DialogContent className="max-w-4xl max-h-[90vh] bg-slate-900 border-slate-800 text-white">
+        <DialogContent className="max-w-5xl max-h-[90vh] bg-slate-900 border-slate-800 text-white flex flex-col p-0 overflow-hidden gap-0">
           {selectedStock && (
             <>
-              <DialogHeader>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center font-bold ${
-                      selectedStock.changePercent > 0 ? 'bg-emerald-600/20 text-emerald-400' :
-                      selectedStock.changePercent < 0 ? 'bg-red-600/20 text-red-400' :
-                      'bg-slate-700 text-slate-400'
-                    }`}>
-                      {selectedStock.code.slice(0, 2)}
-                    </div>
-                    <div>
-                      <DialogTitle className="text-xl">{selectedStock.code}</DialogTitle>
-                      <p className="text-slate-400 text-sm">{selectedStock.name}</p>
-                    </div>
+              {/* ── Header ── */}
+              <div className="flex items-start justify-between px-6 pt-5 pb-4 border-b border-slate-800 shrink-0">
+                <div className="flex items-center gap-4">
+                  <div className={`w-14 h-14 rounded-2xl flex items-center justify-center font-bold text-lg shrink-0 ${
+                    selectedStock.changePercent > 0 ? 'bg-emerald-600/20 text-emerald-400 ring-1 ring-emerald-500/30' :
+                    selectedStock.changePercent < 0 ? 'bg-red-600/20 text-red-400 ring-1 ring-red-500/30' :
+                    'bg-slate-700 text-slate-400'
+                  }`}>
+                    {selectedStock.code.slice(0, 2)}
                   </div>
-                  <div className="text-right">
-                    <p className="text-2xl font-bold">{formatNumber(selectedStock.price)} TL</p>
-                    <p className={`text-lg flex items-center justify-end gap-1 ${
-                      selectedStock.changePercent > 0 ? 'text-emerald-400' :
-                      selectedStock.changePercent < 0 ? 'text-red-400' :
-                      'text-slate-400'
-                    }`}>
-                      {selectedStock.changePercent > 0 ? <ArrowUpRight className="h-4 w-4" /> :
-                       selectedStock.changePercent < 0 ? <ArrowDownRight className="h-4 w-4" /> : null}
-                      {selectedStock.change >= 0 ? '+' : ''}{formatNumber(selectedStock.change)} ({selectedStock.changePercent >= 0 ? '+' : ''}{formatNumber(selectedStock.changePercent)}%)
-                    </p>
+                  <div>
+                    <DialogTitle className="text-2xl font-bold tracking-tight">{selectedStock.code}</DialogTitle>
+                    <p className="text-slate-400 text-sm mt-0.5">{selectedStock.name}</p>
+                    {selectedStock.sector && (
+                      <Badge variant="outline" className="mt-1.5 text-[10px] border-slate-700 text-slate-500 h-5">
+                        {selectedStock.sector}
+                      </Badge>
+                    )}
                   </div>
                 </div>
-              </DialogHeader>
+                <div className="text-right shrink-0 ml-4">
+                  <p className="text-3xl font-bold tabular-nums">{formatNumber(selectedStock.price)} <span className="text-lg text-slate-400">TL</span></p>
+                  <p className={`text-sm flex items-center justify-end gap-1 mt-1 ${
+                    selectedStock.changePercent > 0 ? 'text-emerald-400' :
+                    selectedStock.changePercent < 0 ? 'text-red-400' : 'text-slate-400'
+                  }`}>
+                    {selectedStock.changePercent > 0 ? <ArrowUpRight className="h-4 w-4" /> :
+                     selectedStock.changePercent < 0 ? <ArrowDownRight className="h-4 w-4" /> : null}
+                    {selectedStock.change >= 0 ? '+' : ''}{formatNumber(selectedStock.change)} TL
+                    &nbsp;({selectedStock.changePercent >= 0 ? '+' : ''}{formatNumber(selectedStock.changePercent)}%)
+                  </p>
+                  <div className="flex gap-2 mt-2 justify-end">
+                    <Button
+                      size="sm"
+                      className={`h-7 text-xs ${isInWatchlist(selectedStock.code) ? 'bg-slate-700 hover:bg-slate-600' : 'bg-emerald-600 hover:bg-emerald-700'}`}
+                      onClick={() => { if (isInWatchlist(selectedStock.code)) removeFromWatchlist(selectedStock.code); else addToWatchlist(selectedStock); }}
+                    >
+                      {isInWatchlist(selectedStock.code) ? <StarOff className="h-3 w-3 mr-1" /> : <Star className="h-3 w-3 mr-1" />}
+                      {isInWatchlist(selectedStock.code) ? 'Takipten Çıkar' : 'Takibe Al'}
+                    </Button>
+                    <Button size="sm" variant="outline" className="h-7 text-xs border-slate-700 text-slate-300"
+                      onClick={() => { setAgentOpen(true); setChatInput(`${selectedStock.code} derin matematik analizi`); setDetailOpen(false); }}>
+                      <Bot className="h-3 w-3 mr-1" /> AI Sohbet
+                    </Button>
+                  </div>
+                </div>
+              </div>
 
-              {/* Tabs */}
-              <div className="flex gap-2 my-4">
-                {['1G', '1H', '1A', '3A', '1Y'].map((time) => (
-                  <Button
-                    key={time}
-                    variant={chartTimeframe === time ? 'default' : 'outline'}
-                    size="sm"
-                    className={chartTimeframe === time ? 'bg-emerald-600' : 'border-slate-700 text-slate-300'}
+              {/* ── Tab Navigation ── */}
+              <div className="flex border-b border-slate-800 shrink-0 bg-slate-900/80 px-2">
+                {([
+                  { id: 'grafik' as const, label: '📊 Grafik' },
+                  { id: 'teknik' as const, label: '📈 Teknik Analiz' },
+                  { id: 'ai'     as const, label: '🤖 AI Analiz' },
+                  { id: 'ozet'   as const, label: '📋 Özet' },
+                ]).map(tab => (
+                  <button
+                    key={tab.id}
                     onClick={() => {
-                      setChartTimeframe(time);
-                      fetchHistoricalData(time);
+                      setDetailTab(tab.id);
+                      if (tab.id === 'ai' && !detailAnalysis && !analysisLoading) fetchAIAnalysis(selectedStock.code);
                     }}
+                    className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+                      detailTab === tab.id
+                        ? 'border-emerald-500 text-emerald-400'
+                        : 'border-transparent text-slate-500 hover:text-slate-300'
+                    }`}
                   >
-                    {time}
-                  </Button>
+                    {tab.label}
+                  </button>
                 ))}
               </div>
 
-              {detailLoading ? (
-                <div className="h-[300px] flex items-center justify-center">
-                  <Loader2 className="h-8 w-8 animate-spin text-emerald-400" />
-                </div>
-              ) : historicalData.length > 0 ? (
-                <div className="h-[300px] w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={historicalData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                      <XAxis 
-                        dataKey="date" 
-                        stroke="#64748b" 
-                        tick={{ fill: '#94a3b8', fontSize: 12 }}
-                        tickFormatter={(value) => value.slice(5)}
-                      />
-                      <YAxis 
-                        stroke="#64748b" 
-                        tick={{ fill: '#94a3b8', fontSize: 12 }}
-                        domain={['auto', 'auto']}
-                        tickFormatter={(value) => formatNumber(value)}
-                      />
-                      <Tooltip 
-                        contentStyle={{ 
-                          backgroundColor: '#1e293b', 
-                          border: '1px solid #334155',
-                          borderRadius: '8px'
-                        }}
-                        labelFormatter={(value) => `Tarih: ${value}`}
-                        formatter={(value: number) => [formatNumber(value) + ' TL', 'Fiyat']}
-                      />
-                      <Line 
-                        type="monotone" 
-                        dataKey="close" 
-                        stroke="#10b981" 
-                        strokeWidth={2}
-                        dot={false}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              ) : (
-                <div className="h-[300px] flex items-center justify-center text-slate-400">
-                  Grafik verisi yok
-                </div>
-              )}
+              {/* ── Tab Content ── */}
+              <div className="flex-1 overflow-y-auto">
 
-              {/* Stats Grid */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
-                <div className="bg-slate-800/50 rounded-lg p-3">
-                  <p className="text-slate-400 text-sm">Acilis</p>
-                  <p className="text-white font-medium">{formatNumber(selectedStock.open)} TL</p>
-                </div>
-                <div className="bg-slate-800/50 rounded-lg p-3">
-                  <p className="text-slate-400 text-sm">Yuksek</p>
-                  <p className="text-emerald-400 font-medium">{formatNumber(selectedStock.high)} TL</p>
-                </div>
-                <div className="bg-slate-800/50 rounded-lg p-3">
-                  <p className="text-slate-400 text-sm">Dusuk</p>
-                  <p className="text-red-400 font-medium">{formatNumber(selectedStock.low)} TL</p>
-                </div>
-                <div className="bg-slate-800/50 rounded-lg p-3">
-                  <p className="text-slate-400 text-sm">Hacim</p>
-                  <p className="text-white font-medium">{(selectedStock.volume / 1000).toFixed(0)}K</p>
-                </div>
-              </div>
+                {/* ─── GRAFIK TAB ─── */}
+                {detailTab === 'grafik' && (
+                  <div className="p-5">
+                    {/* Timeframe selector */}
+                    <div className="flex items-center gap-2 mb-4">
+                      <span className="text-xs text-slate-500 mr-1">Dönem:</span>
+                      {([['1G','1M'],['1H','3M'],['1A','6M'],['3A','1Y'],['5Y','5Y']] as [string,string][]).map(([lbl, val]) => (
+                        <Button key={val} size="sm" variant={chartTimeframe === val ? 'default' : 'outline'}
+                          className={`h-7 text-xs px-3 ${chartTimeframe === val ? 'bg-emerald-600 hover:bg-emerald-700' : 'border-slate-700 text-slate-400 hover:text-white'}`}
+                          onClick={() => { setChartTimeframe(val); fetchHistoricalData(val); }}>
+                          {lbl}
+                        </Button>
+                      ))}
+                    </div>
 
-              {/* Actions */}
-              <div className="flex gap-3 mt-6">
-                <Button
-                  variant={isInWatchlist(selectedStock.code) ? 'secondary' : 'default'}
-                  className={isInWatchlist(selectedStock.code) ? 'bg-slate-700' : 'bg-emerald-600 hover:bg-emerald-700'}
-                  onClick={() => {
-                    if (isInWatchlist(selectedStock.code)) {
-                      removeFromWatchlist(selectedStock.code);
-                    } else {
-                      addToWatchlist(selectedStock);
-                    }
-                  }}
-                >
-                  {isInWatchlist(selectedStock.code) ? (
-                    <>
-                      <StarOff className="h-4 w-4 mr-2" />
-                      Takipten Cikar
-                    </>
-                  ) : (
-                    <>
-                      <Star className="h-4 w-4 mr-2" />
-                      Takibe Al
-                    </>
-                  )}
-                </Button>
-                <Button
-                  variant="outline"
-                  className="border-slate-700 text-slate-300"
-                  onClick={() => {
-                    setAgentOpen(true);
-                    setChatInput(`${selectedStock.code} hissesini analiz eder misin?`);
-                  }}
-                >
-                  <Bot className="h-4 w-4 mr-2" />
-                  AI Analizi
-                </Button>
-                <Button
-                  variant="outline"
-                  className="border-slate-700 text-slate-300"
-                  onClick={analyzeCurrentChart}
-                  disabled={chartAnalyzing}
-                >
-                  <LineChartIcon className="h-4 w-4 mr-2" />
-                  Grafigi Analiz Et
-                </Button>
+                    {detailLoading ? (
+                      <div className="h-72 flex items-center justify-center">
+                        <Loader2 className="h-8 w-8 animate-spin text-emerald-400" />
+                      </div>
+                    ) : chartData.length > 0 ? (
+                      <>
+                        {/* ComposedChart: area price + volume bars + SMA lines */}
+                        <ResponsiveContainer width="100%" height={300}>
+                          <ComposedChart data={chartData} margin={{ top: 4, right: 8, bottom: 4, left: 0 }}>
+                            <defs>
+                              <linearGradient id="priceGrad" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%"  stopColor={selectedStock.changePercent >= 0 ? '#10b981' : '#ef4444'} stopOpacity={0.25}/>
+                                <stop offset="95%" stopColor={selectedStock.changePercent >= 0 ? '#10b981' : '#ef4444'} stopOpacity={0}/>
+                              </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false}/>
+                            <XAxis dataKey="date" tick={{ fill:'#475569', fontSize:10 }} tickFormatter={v => v.slice(5)} axisLine={false} tickLine={false} interval="preserveStartEnd"/>
+                            <YAxis yAxisId="vol" orientation="left" tick={{ fill:'#334155', fontSize:9 }} tickFormatter={v => v > 1e6 ? `${(v/1e6).toFixed(0)}M` : v > 1000 ? `${(v/1000).toFixed(0)}K` : String(v)} axisLine={false} tickLine={false} width={38}/>
+                            <YAxis yAxisId="px"  orientation="right" tick={{ fill:'#475569', fontSize:10 }} domain={['auto','auto']} tickFormatter={v => formatNumber(v,0)} axisLine={false} tickLine={false} width={58}/>
+                            <Tooltip
+                              contentStyle={{ backgroundColor:'#0f172a', border:'1px solid #1e293b', borderRadius:'10px', fontSize:'12px' }}
+                              labelFormatter={v => `📅 ${v}`}
+                              formatter={(value: number, name: string) => {
+                                if (name === 'volume') return [`${(value/1000).toFixed(0)}K lot`, 'Hacim'];
+                                if (name === 'sma20')  return [formatNumber(value) + ' TL', 'SMA 20'];
+                                if (name === 'sma50')  return [formatNumber(value) + ' TL', 'SMA 50'];
+                                return [formatNumber(value) + ' TL', 'Kapanış'];
+                              }}
+                            />
+                            <Bar yAxisId="vol" dataKey="volume" fill="#1e293b" opacity={0.7} maxBarSize={5} radius={[1,1,0,0]}/>
+                            <Area yAxisId="px" type="monotone" dataKey="close" stroke={selectedStock.changePercent >= 0 ? '#10b981' : '#ef4444'} strokeWidth={2} fill="url(#priceGrad)" dot={false} activeDot={{ r:4 }}/>
+                            {chartData.some(d => d.sma20 !== null) && (
+                              <Line yAxisId="px" type="monotone" dataKey="sma20" stroke="#f59e0b" strokeWidth={1.5} dot={false} strokeDasharray="4 2"/>
+                            )}
+                            {chartData.some(d => d.sma50 !== null) && (
+                              <Line yAxisId="px" type="monotone" dataKey="sma50" stroke="#3b82f6" strokeWidth={1.5} dot={false} strokeDasharray="6 3"/>
+                            )}
+                          </ComposedChart>
+                        </ResponsiveContainer>
+
+                        {/* Chart legend */}
+                        <div className="flex items-center gap-5 mt-2 justify-end text-[11px] text-slate-500 pr-2">
+                          <span className="flex items-center gap-1.5">
+                            <span className="w-5 h-0.5 rounded" style={{ background: selectedStock.changePercent >= 0 ? '#10b981' : '#ef4444' }}/>
+                            Kapanış
+                          </span>
+                          {chartData.some(d => d.sma20) && <span className="flex items-center gap-1.5"><span className="w-5 h-0.5 rounded" style={{ background:'#f59e0b' }}/>SMA 20</span>}
+                          {chartData.some(d => d.sma50) && <span className="flex items-center gap-1.5"><span className="w-5 h-0.5 rounded" style={{ background:'#3b82f6' }}/>SMA 50</span>}
+                          <span className="flex items-center gap-1.5"><span className="w-3 h-2.5 rounded-sm inline-block bg-slate-700"/>Hacim</span>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="h-72 flex items-center justify-center text-slate-500">Grafik verisi bulunamadı</div>
+                    )}
+
+                    {/* OHLCV stats */}
+                    <div className="grid grid-cols-5 gap-2 mt-5">
+                      {[
+                        { label:'Açılış',       value: formatNumber(selectedStock.open) + ' TL',       color:'text-white' },
+                        { label:'Günün Yükseği',value: formatNumber(selectedStock.high) + ' TL',       color:'text-emerald-400' },
+                        { label:'Günün Düşüğü', value: formatNumber(selectedStock.low) + ' TL',        color:'text-red-400' },
+                        { label:'Önceki Kapanış',value: formatNumber(selectedStock.previousClose)+' TL',color:'text-slate-300' },
+                        { label:'Hacim',         value: selectedStock.volume > 1e6 ? `${(selectedStock.volume/1e6).toFixed(1)}M` : `${(selectedStock.volume/1000).toFixed(0)}K`, color:'text-slate-300' },
+                      ].map(s => (
+                        <div key={s.label} className="bg-slate-800/40 rounded-xl p-3 text-center">
+                          <p className="text-slate-500 text-[10px] mb-1">{s.label}</p>
+                          <p className={`font-semibold text-sm ${s.color}`}>{s.value}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Chart analysis button */}
+                    <div className="mt-4 flex gap-2">
+                      <Button variant="outline" size="sm" className="border-slate-700 text-slate-400 text-xs"
+                        onClick={analyzeCurrentChart} disabled={chartAnalyzing}>
+                        <LineChartIcon className="h-3.5 w-3.5 mr-1.5"/>
+                        {chartAnalyzing ? 'Analiz ediliyor...' : 'Grafik AI Analizi'}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {/* ─── TEKNİK ANALİZ TAB ─── */}
+                {detailTab === 'teknik' && (
+                  <div className="p-5">
+                    {!techData ? (
+                      <div className="flex flex-col items-center justify-center py-16 gap-3 text-slate-500">
+                        <Activity className="h-10 w-10 opacity-40"/>
+                        <p>Teknik analiz için yeterli veri yok</p>
+                        <p className="text-xs text-slate-600">Minimum 15 günlük veri gerekli — daha uzun dönem seçin</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {/* Signal banner */}
+                        <div className={`rounded-2xl p-4 text-center ${
+                          techData.signal === 'GÜÇLÜ ALIM' ? 'bg-emerald-600/20 border border-emerald-500/40' :
+                          techData.signal === 'ALIM'       ? 'bg-emerald-700/15 border border-emerald-600/30' :
+                          techData.signal === 'GÜÇLÜ SATIM'? 'bg-red-600/20 border border-red-500/40' :
+                          techData.signal === 'SATIM'      ? 'bg-red-700/15 border border-red-600/30' :
+                                                             'bg-slate-700/30 border border-slate-600/30'
+                        }`}>
+                          <p className="text-xs text-slate-500 mb-1 uppercase tracking-wider">Bileşik Sinyal</p>
+                          <p className={`text-2xl font-bold ${
+                            techData.signal.includes('ALIM') ? 'text-emerald-400' :
+                            techData.signal.includes('SATIM')? 'text-red-400' : 'text-slate-300'
+                          }`}>{techData.signal}</p>
+                          <p className="text-xs text-slate-600 mt-1">RSI + Bollinger kombinasyonu</p>
+                        </div>
+
+                        {/* RSI + Stochastic */}
+                        <div className="grid grid-cols-2 gap-3">
+                          {/* RSI */}
+                          <div className="bg-slate-800/40 rounded-2xl p-4">
+                            <div className="flex items-center justify-between mb-3">
+                              <p className="text-xs font-medium text-slate-400">RSI (14)</p>
+                              <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
+                                techData.rsi < 30 ? 'bg-emerald-500/20 text-emerald-400' :
+                                techData.rsi > 70 ? 'bg-red-500/20 text-red-400' : 'bg-slate-700 text-slate-400'
+                              }`}>
+                                {techData.rsi < 30 ? 'Aşırı Satım' : techData.rsi > 70 ? 'Aşırı Alım' : 'Normal'}
+                              </span>
+                            </div>
+                            <p className={`text-4xl font-bold mb-4 tabular-nums ${
+                              techData.rsi < 30 ? 'text-emerald-400' : techData.rsi > 70 ? 'text-red-400' : 'text-white'
+                            }`}>{techData.rsi}</p>
+                            <div className="relative h-2 rounded-full overflow-hidden bg-slate-700">
+                              <div className="absolute inset-0 flex">
+                                <div className="w-[30%] bg-emerald-500/50 rounded-l-full"/>
+                                <div className="w-[40%] bg-yellow-500/30"/>
+                                <div className="w-[30%] bg-red-500/50 rounded-r-full"/>
+                              </div>
+                              <div className="absolute top-0 w-2 h-2 bg-white rounded-full shadow-md -translate-x-1/2" style={{ left:`${Math.min(Math.max(techData.rsi,0),100)}%` }}/>
+                            </div>
+                            <div className="flex justify-between text-[9px] text-slate-600 mt-1.5">
+                              <span>0 Satım</span><span>50</span><span>Alım 100</span>
+                            </div>
+                          </div>
+
+                          {/* Stochastic */}
+                          <div className="bg-slate-800/40 rounded-2xl p-4">
+                            <div className="flex items-center justify-between mb-3">
+                              <p className="text-xs font-medium text-slate-400">Stochastic %K (14)</p>
+                              <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
+                                techData.stochK < 20 ? 'bg-emerald-500/20 text-emerald-400' :
+                                techData.stochK > 80 ? 'bg-red-500/20 text-red-400' : 'bg-slate-700 text-slate-400'
+                              }`}>
+                                {techData.stochK < 20 ? 'Aşırı Satım' : techData.stochK > 80 ? 'Aşırı Alım' : 'Normal'}
+                              </span>
+                            </div>
+                            <p className={`text-4xl font-bold mb-4 tabular-nums ${
+                              techData.stochK < 20 ? 'text-emerald-400' : techData.stochK > 80 ? 'text-red-400' : 'text-white'
+                            }`}>{techData.stochK}</p>
+                            <div className="relative h-2 rounded-full overflow-hidden bg-slate-700">
+                              <div className="absolute inset-0 flex">
+                                <div className="w-[20%] bg-emerald-500/50 rounded-l-full"/>
+                                <div className="w-[60%] bg-slate-600/40"/>
+                                <div className="w-[20%] bg-red-500/50 rounded-r-full"/>
+                              </div>
+                              <div className="absolute top-0 w-2 h-2 bg-white rounded-full shadow-md -translate-x-1/2" style={{ left:`${Math.min(Math.max(techData.stochK,0),100)}%` }}/>
+                            </div>
+                            <div className="flex justify-between text-[9px] text-slate-600 mt-1.5">
+                              <span>0</span><span>50</span><span>100</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* MACD */}
+                        {techData.macd && (
+                          <div className="bg-slate-800/40 rounded-2xl p-4">
+                            <p className="text-xs font-medium text-slate-400 mb-3">MACD (12, 26, 9)</p>
+                            <div className="grid grid-cols-3 gap-3 text-center">
+                              {[
+                                { label:'MACD Çizgisi', value: techData.macd.value, color: techData.macd.value >= 0 ? 'text-emerald-400' : 'text-red-400' },
+                                { label:'Sinyal Çizgisi', value: techData.macd.signal, color: 'text-yellow-400' },
+                                { label:'Histogram', value: techData.macd.histogram, color: techData.macd.histogram >= 0 ? 'text-emerald-400' : 'text-red-400' },
+                              ].map(m => (
+                                <div key={m.label} className="bg-slate-800/60 rounded-xl p-3">
+                                  <p className="text-[10px] text-slate-500 mb-1">{m.label}</p>
+                                  <p className={`text-xl font-bold tabular-nums ${m.color}`}>{m.value}</p>
+                                </div>
+                              ))}
+                            </div>
+                            <div className={`mt-3 text-center text-xs py-1.5 rounded-full font-medium ${
+                              techData.macd.trend === 'YUKARI' ? 'bg-emerald-600/20 text-emerald-400' : 'bg-red-600/20 text-red-400'
+                            }`}>
+                              MACD Trendi: {techData.macd.trend === 'YUKARI' ? '▲ Yukarı (Yükseliş baskısı)' : '▼ Aşağı (Düşüş baskısı)'}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Bollinger Bands */}
+                        {techData.bb && (
+                          <div className="bg-slate-800/40 rounded-2xl p-4">
+                            <p className="text-xs font-medium text-slate-400 mb-3">Bollinger Bantları (SMA20, ±2σ)</p>
+                            {/* Position bar */}
+                            <div className="flex items-center gap-2 mb-3">
+                              <span className="text-[10px] text-emerald-400 w-14 text-right">{formatNumber(techData.bb.lower)}</span>
+                              <div className="flex-1 relative h-4 bg-gradient-to-r from-emerald-900/40 via-slate-700/40 to-red-900/40 rounded-full overflow-hidden">
+                                <div
+                                  className="absolute top-0.5 bottom-0.5 w-2 bg-white rounded-full shadow"
+                                  style={{ left:`calc(${Math.max(0,Math.min(100,((selectedStock.price - techData.bb.lower)/(techData.bb.upper - techData.bb.lower))*100))}% - 4px)` }}
+                                />
+                              </div>
+                              <span className="text-[10px] text-red-400 w-14">{formatNumber(techData.bb.upper)}</span>
+                            </div>
+                            <div className="grid grid-cols-3 gap-2 text-center">
+                              <div><p className="text-[10px] text-slate-500">Alt Bant</p><p className="text-sm font-semibold text-emerald-400">{formatNumber(techData.bb.lower)}</p></div>
+                              <div><p className="text-[10px] text-slate-500">Orta (SMA20)</p><p className="text-sm font-semibold text-yellow-400">{formatNumber(techData.bb.middle)}</p></div>
+                              <div><p className="text-[10px] text-slate-500">Üst Bant</p><p className="text-sm font-semibold text-red-400">{formatNumber(techData.bb.upper)}</p></div>
+                            </div>
+                            <p className={`text-[10px] text-center mt-2 ${
+                              selectedStock.price >= techData.bb.upper ? 'text-red-400' :
+                              selectedStock.price <= techData.bb.lower ? 'text-emerald-400' : 'text-slate-500'
+                            }`}>
+                              Mevcut fiyat: {selectedStock.price >= techData.bb.upper ? '⚠ Üst bant üzerinde (aşırı alım)' :
+                                             selectedStock.price <= techData.bb.lower ? '⚠ Alt bant altında (aşırı satım)' : '✓ Bant içinde'}
+                            </p>
+                          </div>
+                        )}
+
+                        {/* SMA + ATR */}
+                        <div className="grid grid-cols-3 gap-3">
+                          <div className="bg-slate-800/40 rounded-2xl p-4">
+                            <p className="text-[10px] text-slate-500 mb-2">SMA 20</p>
+                            <p className="text-2xl font-bold text-yellow-400 tabular-nums">{techData.sma20 ? formatNumber(techData.sma20) : '—'}</p>
+                            {techData.sma20 && <p className={`text-xs mt-1 ${selectedStock.price > techData.sma20 ? 'text-emerald-400' : 'text-red-400'}`}>
+                              {selectedStock.price > techData.sma20 ? '▲ Üstünde' : '▼ Altında'}
+                            </p>}
+                          </div>
+                          <div className="bg-slate-800/40 rounded-2xl p-4">
+                            <p className="text-[10px] text-slate-500 mb-2">SMA 50</p>
+                            <p className="text-2xl font-bold text-blue-400 tabular-nums">{techData.sma50 ? formatNumber(techData.sma50) : '—'}</p>
+                            {techData.sma50 && <p className={`text-xs mt-1 ${selectedStock.price > techData.sma50 ? 'text-emerald-400' : 'text-red-400'}`}>
+                              {selectedStock.price > techData.sma50 ? '▲ Üstünde' : '▼ Altında'}
+                            </p>}
+                          </div>
+                          <div className="bg-slate-800/40 rounded-2xl p-4">
+                            <p className="text-[10px] text-slate-500 mb-2">ATR (14) Volatilite</p>
+                            <p className="text-2xl font-bold text-purple-400 tabular-nums">{techData.atr ? formatNumber(techData.atr.value) : '—'}</p>
+                            {techData.atr && <p className="text-xs text-slate-500 mt-1">%{techData.atr.percent} günlük</p>}
+                          </div>
+                        </div>
+
+                        {/* Fibonacci Levels */}
+                        <div className="bg-slate-800/40 rounded-2xl p-4">
+                          <p className="text-xs font-medium text-slate-400 mb-3">Fibonacci Geri Çekilme Seviyeleri <span className="text-slate-600">(90 günlük yüksek/düşük)</span></p>
+                          <div className="space-y-1.5">
+                            {[
+                              { label:'0% — Dönem Zirvesi',   value: techData.fib.high, color:'text-red-400' },
+                              { label:'23.6%',                value: techData.fib.r236, color:'text-orange-400' },
+                              { label:'38.2%',                value: techData.fib.r382, color:'text-yellow-400' },
+                              { label:'50%',                  value: techData.fib.r500, color:'text-slate-300' },
+                              { label:'61.8% — Altın Oran',  value: techData.fib.r618, color:'text-emerald-400' },
+                              { label:'100% — Dönem Dibi',   value: techData.fib.low,  color:'text-blue-400' },
+                            ].map(({ label, value, color }) => {
+                              const isNear = Math.abs(selectedStock.price - value) / value < 0.015;
+                              return (
+                                <div key={label} className={`flex items-center justify-between text-xs px-3 py-1.5 rounded-lg ${isNear ? 'bg-emerald-500/10 border border-emerald-500/25' : 'hover:bg-slate-700/30'}`}>
+                                  <span className="text-slate-500">{label}</span>
+                                  <div className="flex items-center gap-2">
+                                    <span className={`font-mono font-semibold ${color}`}>{formatNumber(value)} TL</span>
+                                    {isNear && <span className="text-emerald-400 text-[10px] bg-emerald-500/20 px-1.5 py-0.5 rounded-full">Yakın</span>}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* ─── AI ANALİZ TAB ─── */}
+                {detailTab === 'ai' && (
+                  <div className="p-5">
+                    {analysisLoading ? (
+                      <div className="flex flex-col items-center justify-center py-20 gap-4">
+                        <Loader2 className="h-10 w-10 animate-spin text-emerald-400"/>
+                        <p className="text-slate-400 text-sm">AI analizi hazırlanıyor...</p>
+                        <p className="text-slate-600 text-xs">Piyasa verileri ve haberler işleniyor</p>
+                      </div>
+                    ) : detailAnalysis ? (
+                      <div className="space-y-4">
+                        <div className="flex items-center gap-2 text-xs text-slate-500">
+                          <Sparkles className="h-3.5 w-3.5 text-emerald-400"/>
+                          <span>AI tarafından oluşturuldu · Yatırım tavsiyesi değildir</span>
+                        </div>
+                        <div className="bg-slate-800/30 rounded-2xl p-5 text-sm text-slate-300 leading-relaxed whitespace-pre-wrap border border-slate-700/40">
+                          {detailAnalysis}
+                        </div>
+                        <div className="flex gap-2">
+                          <Button size="sm" variant="outline" className="border-slate-700 text-slate-400 text-xs h-8"
+                            onClick={() => { setDetailAnalysis(null); fetchAIAnalysis(selectedStock.code); }}>
+                            <RefreshCw className="h-3 w-3 mr-1.5"/> Yenile
+                          </Button>
+                          <Button size="sm" variant="outline" className="border-slate-700 text-slate-400 text-xs h-8"
+                            onClick={() => { setAgentOpen(true); setChatInput(`${selectedStock.code} hakkında sormak istiyorum`); setDetailOpen(false); }}>
+                            <Bot className="h-3 w-3 mr-1.5"/> AI Sohbette Devam Et
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center py-20 gap-4">
+                        <div className="w-16 h-16 rounded-2xl bg-slate-800 flex items-center justify-center">
+                          <Bot className="h-8 w-8 text-slate-600"/>
+                        </div>
+                        <p className="text-slate-400 font-medium">AI analizi henüz başlatılmadı</p>
+                        <p className="text-slate-600 text-xs text-center max-w-xs">
+                          {selectedStock.code} için güncel fiyat, geçmiş veri ve piyasa haberleri analiz edilecek
+                        </p>
+                        <Button className="bg-emerald-600 hover:bg-emerald-700 mt-2" onClick={() => fetchAIAnalysis(selectedStock.code)}>
+                          <Sparkles className="h-4 w-4 mr-2"/> Analiz Başlat
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* ─── ÖZET TAB ─── */}
+                {detailTab === 'ozet' && (
+                  <div className="p-5 space-y-4">
+                    {/* Günlük fiyat özeti */}
+                    <div className="bg-slate-800/40 rounded-2xl p-4">
+                      <p className="text-xs text-slate-500 font-medium mb-3 uppercase tracking-wider">Günlük Fiyat Özeti</p>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        {[
+                          { label:'Açılış',        value: formatNumber(selectedStock.open) + ' TL',            color:'text-white' },
+                          { label:'Gün Yükseği',   value: formatNumber(selectedStock.high) + ' TL',            color:'text-emerald-400' },
+                          { label:'Gün Düşüğü',    value: formatNumber(selectedStock.low) + ' TL',             color:'text-red-400' },
+                          { label:'Önceki Kapanış',value: formatNumber(selectedStock.previousClose) + ' TL',   color:'text-slate-300' },
+                        ].map(s => (
+                          <div key={s.label} className="bg-slate-800/60 rounded-xl p-3 text-center">
+                            <p className="text-[10px] text-slate-500 mb-1">{s.label}</p>
+                            <p className={`font-semibold text-sm ${s.color}`}>{s.value}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Hacim + Değişim */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="bg-slate-800/40 rounded-2xl p-4">
+                        <p className="text-xs text-slate-500 mb-2">İşlem Hacmi</p>
+                        <p className="text-3xl font-bold tabular-nums">
+                          {selectedStock.volume > 1e6 ? `${(selectedStock.volume/1e6).toFixed(2)}M` : `${(selectedStock.volume/1000).toFixed(0)}K`}
+                        </p>
+                        <p className="text-xs text-slate-600 mt-1">lot</p>
+                      </div>
+                      <div className={`rounded-2xl p-4 ${selectedStock.changePercent >= 0 ? 'bg-emerald-900/20 border border-emerald-800/30' : 'bg-red-900/20 border border-red-800/30'}`}>
+                        <p className="text-xs text-slate-500 mb-2">Günlük Değişim</p>
+                        <p className={`text-3xl font-bold tabular-nums ${selectedStock.changePercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                          {selectedStock.changePercent >= 0 ? '+' : ''}{formatNumber(selectedStock.changePercent)}%
+                        </p>
+                        <p className={`text-sm mt-1 ${selectedStock.changePercent >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                          {selectedStock.change >= 0 ? '+' : ''}{formatNumber(selectedStock.change)} TL
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Dönem içi aralık */}
+                    {historicalData.length > 0 && (() => {
+                      const cls = historicalData.map(d => d.close);
+                      const rHigh = Math.max(...cls), rLow = Math.min(...cls);
+                      const pos = Math.max(0, Math.min(100, ((selectedStock.price - rLow) / (rHigh - rLow)) * 100));
+                      return (
+                        <div className="bg-slate-800/40 rounded-2xl p-4">
+                          <p className="text-xs text-slate-500 font-medium mb-3 uppercase tracking-wider">Dönem İçi Fiyat Aralığı</p>
+                          <div className="flex items-center gap-3 mb-2">
+                            <span className="text-xs text-red-400 w-16 text-right tabular-nums">{formatNumber(rLow)}</span>
+                            <div className="flex-1 relative h-3 bg-slate-700 rounded-full overflow-hidden">
+                              <div className="absolute inset-y-0 rounded-full bg-gradient-to-r from-red-500 via-yellow-500 to-emerald-500" style={{ width:`${pos}%` }}/>
+                              <div className="absolute top-0.5 bottom-0.5 w-2 bg-white rounded-full shadow -translate-x-1/2" style={{ left:`${pos}%` }}/>
+                            </div>
+                            <span className="text-xs text-emerald-400 w-16 tabular-nums">{formatNumber(rHigh)}</span>
+                          </div>
+                          <p className="text-xs text-slate-500 text-center">
+                            Mevcut fiyat aralığın <span className="text-white font-semibold">%{formatNumber(pos, 0)}</span> seviyesinde
+                          </p>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Eylem butonları */}
+                    <div className="space-y-2 pt-2">
+                      <Button className={`w-full ${isInWatchlist(selectedStock.code) ? 'bg-slate-700 hover:bg-slate-600' : 'bg-emerald-600 hover:bg-emerald-700'}`}
+                        onClick={() => { if (isInWatchlist(selectedStock.code)) removeFromWatchlist(selectedStock.code); else addToWatchlist(selectedStock); }}>
+                        {isInWatchlist(selectedStock.code) ? <StarOff className="h-4 w-4 mr-2"/> : <Star className="h-4 w-4 mr-2"/>}
+                        {isInWatchlist(selectedStock.code) ? 'Takipten Çıkar' : 'Takibe Al'}
+                      </Button>
+                      <Button variant="outline" className="w-full border-slate-700 text-slate-300"
+                        onClick={() => { setAgentOpen(true); setChatInput(`${selectedStock.code} için fiyat bildirimi oluştur`); setDetailOpen(false); }}>
+                        <Bell className="h-4 w-4 mr-2"/> Fiyat Bildirimi Oluştur
+                      </Button>
+                      <Button variant="outline" className="w-full border-slate-700 text-slate-300"
+                        onClick={() => { setDetailTab('ai'); if (!detailAnalysis && !analysisLoading) fetchAIAnalysis(selectedStock.code); }}>
+                        <Sparkles className="h-4 w-4 mr-2"/> AI Analizi Görüntüle
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
               </div>
             </>
           )}
