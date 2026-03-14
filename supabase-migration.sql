@@ -72,14 +72,22 @@ CREATE POLICY "comments_delete_own" ON stock_comments
 
 -- ── Auto-update updated_at ──────────────────────────────────
 CREATE OR REPLACE FUNCTION update_updated_at()
-RETURNS TRIGGER LANGUAGE plpgsql AS $$
-BEGIN NEW.updated_at = NOW(); RETURN NEW; END;
-$$;
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $update_updated_at$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$update_updated_at$;
+
+DROP TRIGGER IF EXISTS trg_watchlist_updated_at ON watchlist_items;
+DROP TRIGGER IF EXISTS trg_stock_comments_updated_at ON stock_comments;
 
 CREATE TRIGGER trg_watchlist_updated_at
   BEFORE UPDATE ON watchlist_items
-  FOR EACH ROW EXECUTE PROCEDURE update_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 CREATE TRIGGER trg_stock_comments_updated_at
   BEFORE UPDATE ON stock_comments
-  FOR EACH ROW EXECUTE PROCEDURE update_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
