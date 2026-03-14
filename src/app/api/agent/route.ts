@@ -355,49 +355,66 @@ async function webSearch(query: string) {
   }
 }
 
-// Step 1: LLM generates better search queries
-async function generateSearchQueries(userMessage: string): Promise<string[]> {
-  try {
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.GROQ_API_KEY || 'gsk_demo'}`,
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [
-          {
-            role: 'system',
-            content: `Sen bir arama uzmanısın. Kullanıcının sorusunu daha iyi web aramaları için optimize et.
+const SEARCH_QUERY_SYSTEM = `Sen bir arama uzmanısın. Kullanıcının sorusunu daha iyi web aramaları için optimize et.
 BIST, hisse, finans ve Türk piyasası konularında uzmanlaşmışsın.
 JSON formatında sadece 2-3 arama sorgusu döndür. Başka açıklama yapma.
-Örnek: {"queries": ["THYAO hisse analiz 2024", "Türk Hava Yolları KAP bildirimi", "THYAO teknik analiz"]}`
-          },
-          {
-            role: 'user',
-            content: `Şu soru için en iyi 2-3 arama sorgusunu üret: "${userMessage}"`
-          }
-        ],
-        temperature: 0.3,
-        max_tokens: 200,
-      }),
-    });
+Örnek: {"queries": ["THYAO hisse analiz 2024", "Türk Hava Yolları KAP bildirimi", "THYAO teknik analiz"]}`;
 
-    if (response.ok) {
-      const data = await response.json();
-      const content = data.choices?.[0]?.message?.content || '';
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
-        if (Array.isArray(parsed.queries) && parsed.queries.length > 0) {
-          return parsed.queries.slice(0, 3);
-        }
+// Step 1: LLM generates better search queries
+async function generateSearchQueries(userMessage: string): Promise<string[]> {
+  const parseQueries = (content: string): string[] | null => {
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    try {
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (Array.isArray(parsed.queries) && parsed.queries.length > 0) {
+        return parsed.queries.slice(0, 3);
       }
-    }
-  } catch (_e) {
-    // Fallback to original message
+    } catch (_e) { /* ignore */ }
+    return null;
+  };
+
+  if (process.env.GROQ_API_KEY) {
+    try {
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: 'llama-3.3-70b-versatile',
+          messages: [
+            { role: 'system', content: SEARCH_QUERY_SYSTEM },
+            { role: 'user', content: `Şu soru için en iyi 2-3 arama sorgusunu üret: "${userMessage}"` },
+          ],
+          temperature: 0.3,
+          max_tokens: 200,
+        }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        const queries = parseQueries(data.choices?.[0]?.message?.content || '');
+        if (queries) return queries;
+      }
+    } catch (_e) { /* fall through to ZAI */ }
   }
+
+  // ZAI (Gemini) fallback
+  try {
+    const zai = await ZAI.create();
+    const zaiResp = await zai.chat.completions.create({
+      messages: [
+        { role: 'system', content: SEARCH_QUERY_SYSTEM },
+        { role: 'user', content: `Şu soru için en iyi 2-3 arama sorgusunu üret: "${userMessage}"` },
+      ],
+      temperature: 0.3,
+      max_tokens: 200,
+    });
+    const queries = parseQueries(zaiResp.choices?.[0]?.message?.content || '');
+    if (queries) return queries;
+  } catch (_e) { /* fall through */ }
+
   return [userMessage];
 }
 
@@ -432,7 +449,10 @@ function extractSearchContent(rawResults: unknown): Array<{ title: string; snipp
   return items.filter(i => i.title || i.snippet).slice(0, 10);
 }
 
-// Step 3: Summarize extracted content with Groq
+const SUMMARIZE_SYSTEM = `Sen bir haber ve finans analiz asistanısın. Verilen arama sonuçlarını kullanıcının sorusuyla ilişkilendirerek özetle.
+Sadece başlık ve paragraf bilgilerini kullan. Kaynaklara atıfta bulun. Türkçe yanıt ver.`;
+
+// Step 3: Summarize extracted content with Groq or ZAI fallback
 async function summarizeSearchResults(
   items: Array<{ title: string; snippet: string; url?: string }>,
   userMessage: string
@@ -443,38 +463,36 @@ async function summarizeSearchResults(
     .map((item, i) => `[${i + 1}] Başlık: ${item.title}\nİçerik: ${item.snippet}${item.url ? `\nKaynak: ${item.url}` : ''}`)
     .join('\n\n');
 
-  try {
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.GROQ_API_KEY || 'gsk_demo'}`,
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [
-          {
-            role: 'system',
-            content: `Sen bir haber ve finans analiz asistanısın. Verilen arama sonuçlarını kullanıcının sorusuyla ilişkilendirerek özetle.
-Sadece başlık ve paragraf bilgilerini kullan. Kaynaklara atıfta bulun. Türkçe yanıt ver.`
-          },
-          {
-            role: 'user',
-            content: `Kullanıcı sorusu: "${userMessage}"\n\nArama sonuçları:\n${itemsText}\n\nBu sonuçları kullanıcı sorusuyla ilgili şekilde özetle.`
-          }
-        ],
-        temperature: 0.5,
-        max_tokens: 1000,
-      }),
-    });
+  const messages = [
+    { role: 'system' as const, content: SUMMARIZE_SYSTEM },
+    { role: 'user' as const, content: `Kullanıcı sorusu: "${userMessage}"\n\nArama sonuçları:\n${itemsText}\n\nBu sonuçları kullanıcı sorusuyla ilgili şekilde özetle.` },
+  ];
 
-    if (response.ok) {
-      const data = await response.json();
-      return data.choices?.[0]?.message?.content || itemsText;
-    }
-  } catch (_e) {
-    // Fallback to raw items
+  if (process.env.GROQ_API_KEY) {
+    try {
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+        },
+        body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages, temperature: 0.5, max_tokens: 1000 }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        const text = data.choices?.[0]?.message?.content;
+        if (text) return text;
+      }
+    } catch (_e) { /* fall through to ZAI */ }
   }
+
+  // ZAI (Gemini) fallback
+  try {
+    const zai = await ZAI.create();
+    const zaiResp = await zai.chat.completions.create({ messages, temperature: 0.5, max_tokens: 1000 });
+    const text = zaiResp.choices?.[0]?.message?.content;
+    if (text) return text;
+  } catch (_e) { /* fall through */ }
 
   return items.map(i => `• **${i.title}**: ${i.snippet}`).join('\n');
 }
@@ -674,52 +692,53 @@ async function createPriceAlert(symbol: string, targetPrice: number, condition: 
 
 // TXT File Analysis
 async function readTxtFile(content: string, filename?: string) {
-  try {
-    // Analyze the TXT content using Groq
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.GROQ_API_KEY || 'gsk_demo'}`,
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [
-          {
-            role: 'system',
-            content: `Sen profesyonel bir finansal analiz asistanısın. Kullanıcının yüklediği TXT dosyasını analiz et ve:
+  const txtMessages = [
+    {
+      role: 'system' as const,
+      content: `Sen profesyonel bir finansal analiz asistanısın. Kullanıcının yüklediği TXT dosyasını analiz et ve:
 1. Dosyanın içeriğini özetle
 2. Finansal veriler varsa analiz et
 3. Önemli noktaları vurgula
 4. Varsa hisse senedi kodlarını tespit et
 5. Yatırımcı için önemli bilgileri çıkar
 
-Türkçe yanıt ver ve profesyonel bir rapor formatı kullan.`
-          },
-          {
-            role: 'user',
-            content: `Dosya adı: ${filename || 'bilinmiyor'}\n\nDosya içeriği:\n\`\`\`\n${content.slice(0, 10000)}\n\`\`\`\n\nBu dosyayı analiz et ve raporla.`
-          }
-        ],
-        temperature: 0.3,
-        max_tokens: 2000,
-      }),
-    });
+Türkçe yanıt ver ve profesyonel bir rapor formatı kullan.`,
+    },
+    {
+      role: 'user' as const,
+      content: `Dosya adı: ${filename || 'bilinmiyor'}\n\nDosya içeriği:\n\`\`\`\n${content.slice(0, 10000)}\n\`\`\`\n\nBu dosyayı analiz et ve raporla.`,
+    },
+  ];
 
-    if (response.ok) {
-      const data = await response.json();
-      return {
-        success: true,
-        analysis: data.choices?.[0]?.message?.content,
-        filename,
-        contentLength: content.length,
-      };
-    }
-    
-    return { success: false, error: 'Analiz başarısız' };
+  if (process.env.GROQ_API_KEY) {
+    try {
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+        },
+        body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: txtMessages, temperature: 0.3, max_tokens: 2000 }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        const analysis = data.choices?.[0]?.message?.content;
+        if (analysis) return { success: true, analysis, filename, contentLength: content.length };
+      }
+    } catch (_e) { /* fall through to ZAI */ }
+  }
+
+  // ZAI (Gemini) fallback
+  try {
+    const zai = await ZAI.create();
+    const zaiResp = await zai.chat.completions.create({ messages: txtMessages, temperature: 0.3, max_tokens: 2000 });
+    const analysis = zaiResp.choices?.[0]?.message?.content;
+    if (analysis) return { success: true, analysis, filename, contentLength: content.length };
   } catch (error) {
     return { success: false, error: String(error) };
   }
+
+  return { success: false, error: 'Analiz başarısız' };
 }
 
 // Chart Image Analysis with VLM
@@ -1336,34 +1355,58 @@ SORULAR: GARAN 3 ay sonraki fiyatı ne olur? | AKBNK ile karşılaştırır mıs
 
 "SORULAR:" satırı her zaman son satır olmalı, 3 kısa Türkçe soru içermeli.`;
 
-    const finalResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.GROQ_API_KEY || 'gsk_demo'}`,
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          ...conversationHistory.slice(-6).map((m: { role: string; content: string }) => ({
-            role: m.role,
-            content: m.content,
-          })),
-          { role: 'user', content: userPromptContent },
-        ],
-        temperature: 0.7,
-        max_tokens: 2000,
-      }),
-    });
-
     let rawText = '';
 
-    if (finalResponse.ok) {
-      const finalData = await finalResponse.json();
-      rawText = finalData.choices?.[0]?.message?.content || '';
-    } else {
-      rawText = `İşlem tamamlandı. Araçlar: ${immediateTools.join(', ')}`;
+    // Once Groq dene, basarisiz olursa ZAI (Gemini) fallback
+    if (process.env.GROQ_API_KEY) {
+      const finalResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: 'llama-3.3-70b-versatile',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            ...conversationHistory.slice(-6).map((m: { role: string; content: string }) => ({
+              role: m.role,
+              content: m.content,
+            })),
+            { role: 'user', content: userPromptContent },
+          ],
+          temperature: 0.7,
+          max_tokens: 2000,
+        }),
+      });
+
+      if (finalResponse.ok) {
+        const finalData = await finalResponse.json();
+        rawText = finalData.choices?.[0]?.message?.content || '';
+      }
+    }
+
+    // ZAI (Gemini) fallback — Groq key yoksa veya basarisizsa
+    if (!rawText) {
+      try {
+        const zai = await ZAI.create();
+        const zaiResp = await zai.chat.completions.create({
+          messages: [
+            { role: 'system', content: systemPrompt },
+            ...conversationHistory.slice(-6).map((m: { role: string; content: string }) => ({
+              role: m.role as 'user' | 'assistant',
+              content: m.content,
+            })),
+            { role: 'user', content: userPromptContent },
+          ],
+          temperature: 0.7,
+          max_tokens: 2000,
+        });
+        rawText = zaiResp.choices?.[0]?.message?.content || '';
+      } catch (zaiErr) {
+        console.error('ZAI fallback error:', zaiErr);
+        rawText = `İşlem tamamlandı ama yanıt oluşturulamadı. Araçlar: ${immediateTools.join(', ')}`;
+      }
     }
 
     // Extract "SORULAR:" line for suggested questions
