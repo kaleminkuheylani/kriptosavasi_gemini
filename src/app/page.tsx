@@ -55,6 +55,7 @@ import {
   LayoutDashboard,
   List,
   Users,
+  Activity,
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
@@ -148,8 +149,9 @@ const TABS = [
   { id: 'dashboard', label: 'Ana Sayfa', icon: LayoutDashboard },
   { id: 'stocks', label: 'Hisseler', icon: Database },
   { id: 'watchlist', label: 'Takip Listem', icon: Star },
-  { id: 'gainers', label: 'Yükselenler', icon: TrendingUp },
-  { id: 'losers', label: 'Düşenler', icon: TrendingDown },
+  { id: 'gainers', label: 'Kazananlar', icon: TrendingUp },
+  { id: 'losers', label: 'Kaybedenler', icon: TrendingDown },
+  { id: 'active', label: 'En Aktifler', icon: Activity },
   { id: 'alerts', label: 'Bildirimler', icon: Bell },
 ];
 
@@ -179,6 +181,7 @@ export default function Home() {
   const [popularStocks, setPopularStocks] = useState<Array<{ symbol: string; name: string; count: number; price: number; changePercent: number }>>([]);
   const [sectors, setSectors] = useState<Array<{ name: string; count: number; avgChange: number; topStocks: Stock[] }>>([]);
   const [similarStocks, setSimilarStocks] = useState<Stock[]>([]);
+  const [activeStocks, setActiveStocks] = useState<Array<{ symbol: string; name: string; price: number; change: number; changePercent: number; volume: number; sector: string }>>([]);
   
   // Detail Modal
   const [detailOpen, setDetailOpen] = useState(false);
@@ -293,6 +296,17 @@ export default function Home() {
     } catch {}
   }, []);
 
+  // Fetch most active stocks (by volume)
+  const fetchActiveStocks = useCallback(async () => {
+    try {
+      const response = await fetch('/api/market?type=active');
+      const data = await response.json();
+      if (data.success) {
+        setActiveStocks(data.data);
+      }
+    } catch {}
+  }, []);
+
   // Fetch similar stocks based on user's watchlist
   const fetchSimilarStocks = useCallback(async () => {
     try {
@@ -317,7 +331,8 @@ export default function Home() {
     fetchMarketSummary();
     fetchPopularStocks();
     fetchSectors();
-  }, [fetchStocks, fetchWatchlist, fetchAlerts, fetchCurrentUser, fetchMarketSummary, fetchPopularStocks, fetchSectors]);
+    fetchActiveStocks();
+  }, [fetchStocks, fetchWatchlist, fetchAlerts, fetchCurrentUser, fetchMarketSummary, fetchPopularStocks, fetchSectors, fetchActiveStocks]);
 
   // Fetch similar when watchlist changes
   useEffect(() => {
@@ -1208,36 +1223,106 @@ export default function Home() {
               </div>
             )}
 
-            {/* Gainers Tab */}
+            {/* Kazananlar Tab */}
             {activeTab === 'gainers' && (
               <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
                 <div className="p-4 border-b border-slate-800">
                   <h3 className="font-semibold text-white flex items-center gap-2">
                     <TrendingUp className="h-5 w-5 text-emerald-400" />
-                    Gunun Yukselenleri
+                    Gunun Kazananlari
                   </h3>
                 </div>
                 <div className="max-h-[70vh] overflow-y-auto">
-                  {[...stocks].sort((a, b) => b.changePercent - a.changePercent).map((stock) => (
-                    <StockCard key={stock.code} stock={stock} />
-                  ))}
+                  {[...stocks]
+                    .filter(s => s.changePercent > 0)
+                    .sort((a, b) => b.changePercent - a.changePercent)
+                    .map((stock) => (
+                      <StockCard key={stock.code} stock={stock} />
+                    ))}
                 </div>
               </div>
             )}
 
-            {/* Losers Tab */}
+            {/* Kaybedenler Tab */}
             {activeTab === 'losers' && (
               <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
                 <div className="p-4 border-b border-slate-800">
                   <h3 className="font-semibold text-white flex items-center gap-2">
                     <TrendingDown className="h-5 w-5 text-red-400" />
-                    Gunun Dusenleri
+                    Gunun Kaybedenleri
                   </h3>
                 </div>
                 <div className="max-h-[70vh] overflow-y-auto">
-                  {[...stocks].sort((a, b) => a.changePercent - b.changePercent).map((stock) => (
-                    <StockCard key={stock.code} stock={stock} />
-                  ))}
+                  {[...stocks]
+                    .filter(s => s.changePercent < 0)
+                    .sort((a, b) => a.changePercent - b.changePercent)
+                    .map((stock) => (
+                      <StockCard key={stock.code} stock={stock} />
+                    ))}
+                </div>
+              </div>
+            )}
+
+            {/* En Aktifler Tab */}
+            {activeTab === 'active' && (
+              <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
+                <div className="p-4 border-b border-slate-800">
+                  <h3 className="font-semibold text-white flex items-center gap-2">
+                    <Activity className="h-5 w-5 text-blue-400" />
+                    En Cok Islem Gorenler
+                  </h3>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-slate-400">
+                        <th className="text-left p-3 font-medium">Sembol</th>
+                        <th className="text-left p-3 font-medium hidden sm:table-cell">Sirket</th>
+                        <th className="text-right p-3 font-medium">Fiyat</th>
+                        <th className="text-right p-3 font-medium">Degisim</th>
+                        <th className="text-right p-3 font-medium">Hacim</th>
+                        <th className="text-left p-3 font-medium hidden md:table-cell">Sektor</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {activeStocks.map((s) => (
+                        <tr
+                          key={s.symbol}
+                          className="border-b border-slate-800 hover:bg-slate-800/50 cursor-pointer"
+                          onClick={() => {
+                            const stock = stocks.find(st => st.code === s.symbol);
+                            if (stock) openStockDetail(stock);
+                          }}
+                        >
+                          <td className="p-3">
+                            <span className="font-semibold text-white">{s.symbol}</span>
+                          </td>
+                          <td className="p-3 text-slate-400 hidden sm:table-cell text-xs">{s.name}</td>
+                          <td className="p-3 text-right text-white font-medium">
+                            {s.price.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </td>
+                          <td className={`p-3 text-right font-medium ${s.changePercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                            {s.changePercent >= 0 ? '+' : ''}{s.changePercent.toFixed(2)}%
+                          </td>
+                          <td className="p-3 text-right text-slate-300">
+                            {s.volume >= 1000000
+                              ? `${(s.volume / 1000000).toFixed(1)}M`
+                              : s.volume >= 1000
+                                ? `${(s.volume / 1000).toFixed(0)}K`
+                                : s.volume.toLocaleString('tr-TR')}
+                          </td>
+                          <td className="p-3 text-slate-400 text-xs hidden md:table-cell">{s.sector}</td>
+                        </tr>
+                      ))}
+                      {activeStocks.length === 0 && (
+                        <tr>
+                          <td colSpan={6} className="p-8 text-center text-slate-500">
+                            Veri yukleniyor...
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             )}

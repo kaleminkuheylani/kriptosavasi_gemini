@@ -147,6 +147,28 @@ export async function GET(request: NextRequest) {
     });
   }
   
+  // Get most active (by volume)
+  if (type === 'active') {
+    const active = [...stocks]
+      .sort((a, b) => b.volume - a.volume)
+      .slice(0, 20);
+
+    return NextResponse.json({
+      success: true,
+      data: active.map(s => ({
+        symbol: s.code,
+        name: s.name,
+        price: s.price,
+        change: s.change,
+        changePercent: s.changePercent,
+        volume: s.volume,
+        sector: s.sector || 'Diger',
+      })),
+      count: active.length,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
   // Get popular (most added to watchlist)
   if (type === 'popular') {
     try {
