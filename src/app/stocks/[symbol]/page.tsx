@@ -516,6 +516,12 @@ export default function StockDetailPage() {
           </div>
         </div>
 
+        <div className="rounded-lg border border-amber-600/40 bg-amber-500/10 px-4 py-3">
+          <p className="text-sm text-amber-200">
+            Yatirim tavsiyesi degildir. Bu sayfadaki tum analiz ve yorumlar sadece egitim iceriklidir.
+          </p>
+        </div>
+
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <Card className="border-slate-800 bg-slate-900">
             <CardHeader className="pb-2">
