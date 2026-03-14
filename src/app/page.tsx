@@ -189,11 +189,10 @@ const TOOL_CATEGORIES = [
 // Tab definitions
 const TABS = [
   { id: 'dashboard', label: 'Ana Sayfa', icon: LayoutDashboard },
-  { id: 'stocks', label: 'Hisseler', icon: Database },
-  { id: 'watchlist', label: 'Takip Listem', icon: Star },
-  { id: 'gainers', label: 'Yükselenler', icon: TrendingUp },
-  { id: 'losers', label: 'Düşenler', icon: TrendingDown },
-  { id: 'alerts', label: 'Bildirimler', icon: Bell },
+  { id: 'stocks',    label: 'Hisseler',  icon: Database },
+  { id: 'market',    label: 'Market',    icon: TrendingUp },
+  { id: 'watchlist', label: 'Takip',     icon: Star },
+  { id: 'alerts',    label: 'Bildirim',  icon: Bell },
 ];
 
 export default function Home() {
@@ -208,6 +207,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [marketTab, setMarketTab] = useState<'gainers' | 'losers' | 'active'>('gainers');
   
   // Market Summary
   const [marketSummary, setMarketSummary] = useState<{
@@ -1112,7 +1112,7 @@ export default function Home() {
                     title="En Cok Kazandiranlar" 
                     icon={TrendingUp} 
                     color="text-emerald-400"
-                    onSeeAll={() => setActiveTab('gainers')}
+                    onSeeAll={() => { setMarketTab('gainers'); setActiveTab('market'); }}
                   >
                     {[...stocks].sort((a, b) => b.changePercent - a.changePercent).slice(0, 5).map((stock) => (
                       <StockCard key={stock.code} stock={stock} />
@@ -1124,7 +1124,7 @@ export default function Home() {
                     title="En Cok Kaybettirenler" 
                     icon={TrendingDown} 
                     color="text-red-400"
-                    onSeeAll={() => setActiveTab('losers')}
+                    onSeeAll={() => { setMarketTab('losers'); setActiveTab('market'); }}
                   >
                     {[...stocks].sort((a, b) => a.changePercent - b.changePercent).slice(0, 5).map((stock) => (
                       <StockCard key={stock.code} stock={stock} />
@@ -1276,36 +1276,50 @@ export default function Home() {
               </div>
             )}
 
-            {/* Gainers Tab */}
-            {activeTab === 'gainers' && (
+            {/* Market Tab */}
+            {activeTab === 'market' && (
               <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
-                <div className="p-4 border-b border-slate-800">
-                  <h3 className="font-semibold text-white flex items-center gap-2">
-                    <TrendingUp className="h-5 w-5 text-emerald-400" />
-                    Gunun Yukselenleri
-                  </h3>
-                </div>
-                <div className="max-h-[70vh] overflow-y-auto">
-                  {[...stocks].sort((a, b) => b.changePercent - a.changePercent).map((stock) => (
-                    <StockCard key={stock.code} stock={stock} />
+                {/* Alt sekme başlıkları */}
+                <div className="flex border-b border-slate-800">
+                  {([
+                    { id: 'gainers', label: 'Kazananlar', icon: TrendingUp,   color: 'text-emerald-400', active: 'border-emerald-500 text-emerald-400' },
+                    { id: 'losers',  label: 'Düşenler',   icon: TrendingDown, color: 'text-red-400',     active: 'border-red-500 text-red-400' },
+                    { id: 'active',  label: 'En Aktif',   icon: BarChart3,    color: 'text-sky-400',     active: 'border-sky-500 text-sky-400' },
+                  ] as const).map(tab => (
+                    <button
+                      key={tab.id}
+                      onClick={() => setMarketTab(tab.id)}
+                      className={`flex-1 flex items-center justify-center gap-2 py-3 text-sm font-medium border-b-2 transition-colors ${
+                        marketTab === tab.id
+                          ? tab.active + ' bg-slate-800/50'
+                          : 'border-transparent text-slate-500 hover:text-slate-300'
+                      }`}
+                    >
+                      <tab.icon className={`h-4 w-4 ${marketTab === tab.id ? tab.color : ''}`} />
+                      {tab.label}
+                    </button>
                   ))}
                 </div>
-              </div>
-            )}
 
-            {/* Losers Tab */}
-            {activeTab === 'losers' && (
-              <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
-                <div className="p-4 border-b border-slate-800">
-                  <h3 className="font-semibold text-white flex items-center gap-2">
-                    <TrendingDown className="h-5 w-5 text-red-400" />
-                    Gunun Dusenleri
-                  </h3>
-                </div>
+                {/* İçerik */}
                 <div className="max-h-[70vh] overflow-y-auto">
-                  {[...stocks].sort((a, b) => a.changePercent - b.changePercent).map((stock) => (
-                    <StockCard key={stock.code} stock={stock} />
-                  ))}
+                  {marketTab === 'gainers' &&
+                    [...stocks]
+                      .filter(s => s.changePercent > 0)
+                      .sort((a, b) => b.changePercent - a.changePercent)
+                      .map(stock => <StockCard key={stock.code} stock={stock} />)
+                  }
+                  {marketTab === 'losers' &&
+                    [...stocks]
+                      .filter(s => s.changePercent < 0)
+                      .sort((a, b) => a.changePercent - b.changePercent)
+                      .map(stock => <StockCard key={stock.code} stock={stock} />)
+                  }
+                  {marketTab === 'active' &&
+                    [...stocks]
+                      .sort((a, b) => b.volume - a.volume)
+                      .map(stock => <StockCard key={stock.code} stock={stock} />)
+                  }
                 </div>
               </div>
             )}
