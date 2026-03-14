@@ -11,13 +11,18 @@ datasource db {
 }
 
 model User {
-  id           String   @id @default(cuid())
-  rumuz        String   @unique  // Kullanıcı rumuzu (nickname)
-  avatar       String?           // Avatar rengi veya URL
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id              String   @id @default(cuid())
+  email           String   @unique
+  passwordHash    String
+  name            String                   // Görünen ad
+  investorType    String                   // 'short' | 'long' | 'both'
+  heardFrom       String                   // 'social_media' | 'friend' | 'google' | 'youtube' | 'other'
+  avatar          String   @default("cyan")
+  dailyRequests   Int      @default(0)
+  lastRequestDate String?                  // YYYY-MM-DD
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  // İlişkiler
   watchlist    WatchlistItem[]
   alerts       PriceAlert[]
 }
@@ -30,7 +35,6 @@ model WatchlistItem {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  // User ilişkisi
   userId      String?
   user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
@@ -44,7 +48,6 @@ model PriceAlert {
   triggered   Boolean  @default(false)
   createdAt   DateTime @default(now())
 
-  // User ilişkisi
   userId      String?
   user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
