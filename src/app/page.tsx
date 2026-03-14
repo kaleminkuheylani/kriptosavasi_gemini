@@ -141,6 +141,49 @@ const TOOLS = [
   { id: 'get_price_alerts', name: 'Bildirimler', icon: Bell, color: 'text-amber-400' },
   { id: 'create_price_alert', name: 'Bildirim Oluştur', icon: Bell, color: 'text-amber-400' },
   { id: 'analyze_chart_image', name: 'Grafik Analizi', icon: LineChartIcon, color: 'text-violet-400' },
+  // New tools
+  { id: 'analyze_portfolio', name: 'Portföy Analizi', icon: Sparkles, color: 'text-yellow-300' },
+  { id: 'compare_stocks', name: 'Hisse Karşılaştır', icon: BarChart3, color: 'text-sky-400' },
+  { id: 'technical_indicators', name: 'RSI/Bollinger', icon: LineChartIcon, color: 'text-indigo-400' },
+  { id: 'get_economic_calendar', name: 'Ekonomi Takvimi', icon: Building2, color: 'text-teal-400' },
+  { id: 'stock_screener', name: 'Hisse Tarayıcı', icon: Scan, color: 'text-rose-400' },
+];
+
+// Tool categories for UI selector
+const TOOL_CATEGORIES = [
+  {
+    id: 'price',
+    label: 'Fiyat & Teknik',
+    color: 'emerald',
+    activeClass: 'bg-emerald-600/20 border-emerald-500 text-emerald-300',
+    inactiveClass: 'border-slate-700 text-slate-500',
+    tools: ['get_stock_price', 'get_stock_history', 'technical_indicators', 'compare_stocks'],
+  },
+  {
+    id: 'news',
+    label: 'Haber & KAP',
+    color: 'blue',
+    activeClass: 'bg-blue-600/20 border-blue-500 text-blue-300',
+    inactiveClass: 'border-slate-700 text-slate-500',
+    tools: ['web_search', 'read_document', 'get_kap_data', 'get_economic_calendar'],
+  },
+  {
+    id: 'portfolio',
+    label: 'Portföy',
+    color: 'yellow',
+    activeClass: 'bg-yellow-600/20 border-yellow-500 text-yellow-300',
+    inactiveClass: 'border-slate-700 text-slate-500',
+    tools: ['get_watchlist', 'add_to_watchlist', 'remove_from_watchlist',
+            'get_price_alerts', 'create_price_alert', 'analyze_portfolio'],
+  },
+  {
+    id: 'market',
+    label: 'Piyasa',
+    color: 'pink',
+    activeClass: 'bg-pink-600/20 border-pink-500 text-pink-300',
+    inactiveClass: 'border-slate-700 text-slate-500',
+    tools: ['scan_market', 'get_top_gainers', 'get_top_losers', 'stock_screener'],
+  },
 ];
 
 // Tab definitions
@@ -195,6 +238,11 @@ export default function Home() {
   const [chatLoading, setChatLoading] = useState(false);
   const [lastToolsUsed, setLastToolsUsed] = useState<string[]>([]);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  // Tool category selector: all enabled by default
+  const [enabledCategories, setEnabledCategories] = useState<Set<string>>(
+    new Set(TOOL_CATEGORIES.map(c => c.id))
+  );
+  const [toolSelectorOpen, setToolSelectorOpen] = useState(false);
   
   // File uploads
   const txtInputRef = useRef<HTMLInputElement>(null);
@@ -402,22 +450,32 @@ export default function Home() {
     }
   };
 
+  // Compute enabled tools from selected categories
+  const getEnabledTools = () => {
+    const allEnabled = enabledCategories.size === TOOL_CATEGORIES.length;
+    if (allEnabled) return undefined; // no filter = all tools
+    return TOOL_CATEGORIES
+      .filter(c => enabledCategories.has(c.id))
+      .flatMap(c => c.tools);
+  };
+
   // AI Agent Chat
   const sendToAgent = async () => {
     if (!chatInput.trim() || chatLoading) return;
-    
+
     const userMessage = chatInput.trim();
     setChatInput('');
     setChatMessages(prev => [...prev, { role: 'user', content: userMessage, timestamp: new Date() }]);
     setChatLoading(true);
-    
+
     try {
       const response = await fetch('/api/agent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           message: userMessage,
           conversationHistory: chatMessages.slice(-10).map(m => ({ role: m.role, content: m.content })),
+          enabledTools: getEnabledTools(),
         }),
       });
       
@@ -1559,6 +1617,53 @@ export default function Home() {
             </div>
           </DialogHeader>
 
+          {/* Tool Category Selector */}
+          <div className="py-2 border-b border-slate-800">
+            <button
+              onClick={() => setToolSelectorOpen(v => !v)}
+              className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 transition-colors mb-1"
+            >
+              <Zap className="h-3 w-3" />
+              Araç Kategorileri
+              <span className="text-slate-600 ml-0.5">{toolSelectorOpen ? '▲' : '▼'}</span>
+            </button>
+            {toolSelectorOpen && (
+              <div className="flex flex-wrap gap-1.5 mt-1.5">
+                {TOOL_CATEGORIES.map(cat => {
+                  const active = enabledCategories.has(cat.id);
+                  return (
+                    <button
+                      key={cat.id}
+                      onClick={() => {
+                        setEnabledCategories(prev => {
+                          const next = new Set(prev);
+                          if (next.has(cat.id)) {
+                            if (next.size > 1) next.delete(cat.id); // keep at least 1
+                          } else {
+                            next.add(cat.id);
+                          }
+                          return next;
+                        });
+                      }}
+                      className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                        active ? cat.activeClass : cat.inactiveClass
+                      }`}
+                    >
+                      {cat.label}
+                      {active && <span className="ml-1 opacity-60">✓</span>}
+                    </button>
+                  );
+                })}
+                <button
+                  onClick={() => setEnabledCategories(new Set(TOOL_CATEGORIES.map(c => c.id)))}
+                  className="text-xs px-2.5 py-1 rounded-full border border-slate-700 text-slate-500 hover:text-slate-300 transition-colors"
+                >
+                  Tümü
+                </button>
+              </div>
+            )}
+          </div>
+
           {/* Tools Used */}
           {lastToolsUsed.length > 0 && (
             <div className="flex flex-wrap gap-1 py-2">
@@ -1587,8 +1692,10 @@ export default function Home() {
                     {[
                       'Gunun yukselen hisseleri',
                       'THYAO hisse analizi',
-                      'Takip listemi goster',
-                      'KAP haberleri',
+                      'Portfoyumu analiz et',
+                      'THYAO ve GARAN karsilastir',
+                      'ASELS RSI hesapla',
+                      'Ekonomi takvimi',
                     ].map((suggestion) => (
                       <Button
                         key={suggestion}

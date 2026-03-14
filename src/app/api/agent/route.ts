@@ -5,6 +5,70 @@ import { cookies } from 'next/headers';
 
 const prisma = new PrismaClient();
 
+// ─── Rate Limiting + Token Budget ────────────────────────────────────────────
+interface RateLimitEntry {
+  requests: number[]; // Unix timestamps of recent requests
+  tokens: number;     // tokens used today
+  tokenDate: string;  // YYYY-MM-DD
+}
+
+const rateLimitStore = new Map<string, RateLimitEntry>();
+
+const LIMITS = {
+  user:  { rpm: 15, dailyTokens: 60_000 },
+  guest: { rpm:  5, dailyTokens: 15_000 },
+};
+
+function getRateLimitEntry(key: string): RateLimitEntry {
+  if (!rateLimitStore.has(key)) {
+    rateLimitStore.set(key, { requests: [], tokens: 0, tokenDate: '' });
+  }
+  return rateLimitStore.get(key)!;
+}
+
+/** Returns { throttled, maxTokens } — never throws, never surfaces to user */
+function checkRateLimit(userId: string | null): { throttled: boolean; maxTokens: number } {
+  const key = userId || 'guest';
+  const limits = userId ? LIMITS.user : LIMITS.guest;
+  const entry = getRateLimitEntry(key);
+  const now = Date.now();
+
+  // Sliding window: keep only timestamps within last 60 s
+  entry.requests = entry.requests.filter(t => now - t < 60_000);
+
+  // Reset daily token counter if date changed
+  const today = new Date().toISOString().slice(0, 10);
+  if (entry.tokenDate !== today) {
+    entry.tokens = 0;
+    entry.tokenDate = today;
+  }
+
+  const overRpm = entry.requests.length >= limits.rpm;
+  const overDaily = entry.tokens >= limits.dailyTokens;
+
+  // Record this request
+  entry.requests.push(now);
+
+  if (overDaily) {
+    // Heavily throttle: return a short canned response
+    return { throttled: true, maxTokens: 0 };
+  }
+  if (overRpm) {
+    // Soft throttle: reduce quality silently
+    return { throttled: false, maxTokens: 400 };
+  }
+  return { throttled: false, maxTokens: 1500 };
+}
+
+function recordTokenUsage(userId: string | null, tokens: number) {
+  const key = userId || 'guest';
+  const entry = getRateLimitEntry(key);
+  const today = new Date().toISOString().slice(0, 10);
+  if (entry.tokenDate !== today) { entry.tokens = 0; entry.tokenDate = today; }
+  entry.tokens += tokens;
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 // Helper - Get current user
 async function getCurrentUserId() {
   const cookieStore = await cookies();
@@ -72,6 +136,31 @@ const TOOLS = {
   analyze_chart_image: {
     description: 'Hisse grafiği veya finansal grafik görselini VLM ile analiz eder. Trend, destek/direnç, formasyon tespiti yapar.',
     parameters: { imageBase64: 'string - Base64 encoded image', symbol: 'string - Hisse kodu (opsiyonel)' },
+  },
+  analyze_portfolio: {
+    description: 'Kullanıcının tüm takip listesi hisselerini analiz eder. Güncel fiyat, toplam değer, en iyi/kötü performer, portföy özeti döndürür.',
+    parameters: {},
+  },
+  compare_stocks: {
+    description: '2-5 hisseyi yan yana karşılaştırır: fiyat, günlük değişim, 1 aylık trend, hacim, SMA göstergeleri.',
+    parameters: { symbols: 'string[] - Karşılaştırılacak hisse kodları (örn: ["THYAO","GARAN","AKBNK"])' },
+  },
+  technical_indicators: {
+    description: 'Hisse için teknik göstergeleri hesaplar: RSI(14), SMA(20/50), Bollinger Bands. Al/Sat sinyali üretir.',
+    parameters: { symbol: 'string - Hisse kodu', period: 'string - 1M|3M|6M (varsayılan: 3M)' },
+  },
+  get_economic_calendar: {
+    description: 'Yaklaşan TCMB faiz kararları, BIST önemli açıklamalar, şirket bilanço takvimini getirir.',
+    parameters: { days: 'number - Önümüzdeki kaç gün (varsayılan: 30)' },
+  },
+  stock_screener: {
+    description: 'Kriterlere göre hisse filtreler ve tarar. Değişim yönü, hacim, fiyat aralığı, sektöre göre filtreleme yapar.',
+    parameters: {
+      minChange: 'number - Minimum değişim yüzdesi (örn: 2 = %2 üzeri yükselenler)',
+      maxChange: 'number - Maksimum değişim yüzdesi',
+      minVolume: 'number - Minimum işlem hacmi (lot)',
+      sector:    'string - Sektör filtresi (opsiyonel)',
+    },
   },
 };
 
@@ -783,6 +872,229 @@ Not: Bu analiz yatırım tavsiyesi değildir, sadece teknik analiz özetidir.`;
   }
 }
 
+// ─── New Tool Implementations ─────────────────────────────────────────────────
+
+async function analyzePortfolio(userId: string | null) {
+  try {
+    const watchlistResult = await getWatchlist(userId) as { success: boolean; data?: Array<{ symbol: string; name: string; targetPrice?: number | null }> };
+    if (!watchlistResult.success || !watchlistResult.data || watchlistResult.data.length === 0) {
+      return { success: false, error: 'Takip listesi boş veya alınamadı' };
+    }
+    const items = watchlistResult.data;
+
+    // Fetch prices in parallel
+    const priceResults = await Promise.all(
+      items.map(async (item) => {
+        const p = await getStockPrice(item.symbol) as { success: boolean; data?: Record<string, number & string> };
+        return { symbol: item.symbol, name: item.name, targetPrice: item.targetPrice ?? null, price: p };
+      })
+    );
+
+    const portfolio = priceResults
+      .filter(r => r.price.success && r.price.data)
+      .map(r => {
+        const d = r.price.data as Record<string, number & string>;
+        return {
+          symbol: r.symbol,
+          name: r.name,
+          price: d.price as number,
+          change: d.change as number,
+          changePercent: d.changePercent as number,
+          volume: d.volume as number,
+          targetPrice: r.targetPrice,
+          targetDiff: r.targetPrice ? +(((d.price as number) - r.targetPrice) / r.targetPrice * 100).toFixed(2) : null,
+        };
+      });
+
+    if (portfolio.length === 0) return { success: false, error: 'Fiyat verisi alınamadı' };
+
+    const sorted = [...portfolio].sort((a, b) => b.changePercent - a.changePercent);
+    const avgChange = portfolio.reduce((s, p) => s + p.changePercent, 0) / portfolio.length;
+
+    return {
+      success: true,
+      data: {
+        items: portfolio,
+        count: portfolio.length,
+        bestPerformer: sorted[0],
+        worstPerformer: sorted[sorted.length - 1],
+        avgChangePercent: +avgChange.toFixed(2),
+        gainers: portfolio.filter(p => p.changePercent > 0).length,
+        losers:  portfolio.filter(p => p.changePercent < 0).length,
+      },
+    };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+async function compareStocks(symbols: string[]) {
+  if (!symbols || symbols.length < 2) return { success: false, error: 'En az 2 hisse kodu gerekli' };
+  const syms = symbols.slice(0, 5).map(s => s.toUpperCase());
+
+  try {
+    const results = await Promise.all(syms.map(async (sym) => {
+      const [priceRes, histRes] = await Promise.all([
+        getStockPrice(sym) as Promise<{ success: boolean; data?: Record<string, number & string> }>,
+        getStockHistory(sym, '1M') as Promise<{ success: boolean; data?: Array<{ close: number }>; indicators?: { sma20: number | null; sma50: number | null }; trend?: string }>,
+      ]);
+
+      const price = priceRes.success && priceRes.data ? priceRes.data : null;
+      const hist = histRes.success && histRes.data && histRes.data.length > 0 ? histRes.data : null;
+      const monthChange = hist
+        ? +(((hist[hist.length - 1].close - hist[0].close) / hist[0].close) * 100).toFixed(2)
+        : null;
+
+      return {
+        symbol: sym,
+        price:         price?.price ?? null,
+        change:        price?.change ?? null,
+        changePercent: price?.changePercent ?? null,
+        volume:        price?.volume ?? null,
+        high:          price?.high ?? null,
+        low:           price?.low ?? null,
+        monthChange,
+        sma20:  histRes.indicators?.sma20 ?? null,
+        trend:  histRes.trend ?? 'NEUTRAL',
+      };
+    }));
+
+    return { success: true, data: results, count: results.length };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+function calcTechnicalIndicators(closes: number[]) {
+  if (closes.length < 20) return null;
+
+  // SMA
+  const sma20 = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+  const sma50 = closes.length >= 50 ? closes.slice(-50).reduce((a, b) => a + b, 0) / 50 : null;
+
+  // RSI(14)
+  const changes = closes.slice(-15).map((c, i, arr) => (i === 0 ? 0 : c - arr[i - 1]));
+  const gains = changes.filter(c => c > 0);
+  const losses = changes.filter(c => c < 0).map(c => Math.abs(c));
+  const avgGain = gains.reduce((a, b) => a + b, 0) / 14;
+  const avgLoss = losses.reduce((a, b) => a + b, 0) / 14;
+  const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+  const rsi = +(100 - 100 / (1 + rs)).toFixed(2);
+
+  // Bollinger Bands (SMA20 ± 2σ)
+  const mean = sma20;
+  const variance = closes.slice(-20).reduce((s, c) => s + Math.pow(c - mean, 2), 0) / 20;
+  const stddev = Math.sqrt(variance);
+  const bbUpper = +(mean + 2 * stddev).toFixed(2);
+  const bbLower = +(mean - 2 * stddev).toFixed(2);
+  const bbMiddle = +mean.toFixed(2);
+
+  const lastClose = closes[closes.length - 1];
+
+  // Signal
+  let signal = 'NÖTR';
+  if (rsi < 30 && lastClose <= bbLower) signal = 'GÜÇLÜ ALIM';
+  else if (rsi < 40) signal = 'ALIM ZONU';
+  else if (rsi > 70 && lastClose >= bbUpper) signal = 'GÜÇLÜ SATIM';
+  else if (rsi > 60) signal = 'SATIM ZONU';
+
+  return {
+    rsi,
+    sma20: +sma20.toFixed(2),
+    sma50: sma50 ? +sma50.toFixed(2) : null,
+    bbUpper,
+    bbMiddle,
+    bbLower,
+    lastClose: +lastClose.toFixed(2),
+    signal,
+    trendVsSma20: lastClose > sma20 ? 'ÜSTÜNDE' : 'ALTINDA',
+    trendVsSma50: sma50 ? (lastClose > sma50 ? 'ÜSTÜNDE' : 'ALTINDA') : null,
+  };
+}
+
+async function technicalIndicators(symbol: string, period: string = '3M') {
+  try {
+    const histResult = await getStockHistory(symbol.toUpperCase(), period) as {
+      success: boolean;
+      data?: Array<{ close: number }>;
+    };
+
+    if (!histResult.success || !histResult.data || histResult.data.length < 20) {
+      return { success: false, error: 'Yeterli veri yok (min 20 gün gerekli)' };
+    }
+
+    const closes = histResult.data.map(d => d.close);
+    const indicators = calcTechnicalIndicators(closes);
+
+    if (!indicators) return { success: false, error: 'Gösterge hesaplanamadı' };
+
+    return { success: true, symbol: symbol.toUpperCase(), period, data: indicators };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+async function getEconomicCalendar(days: number = 30) {
+  try {
+    const zai = await ZAI.create();
+    const queries = [
+      `TCMB faiz kararı tarihi ${new Date().getFullYear()}`,
+      `BIST şirket bilanço açıklama takvimi önümüzdeki ${days} gün`,
+      `Türkiye ekonomi takvim enflasyon TUIK açıklama`,
+    ];
+    const results = await Promise.all(
+      queries.map(q => zai.functions.invoke('web_search', { query: q, num: 3 }).catch(() => null))
+    );
+    return {
+      success: true,
+      data: { queries, results: results.filter(Boolean), daysAhead: days },
+    };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+async function stockScreener(params: {
+  minChange?: number;
+  maxChange?: number;
+  minVolume?: number;
+  sector?: string;
+}) {
+  try {
+    const marketData = await scanMarket() as {
+      success: boolean;
+      data?: {
+        all: Array<{ code: string; name: string; price: number; changePercent: number; volume: number }>;
+      };
+    };
+
+    if (!marketData.success || !marketData.data?.all) {
+      return { success: false, error: 'Piyasa verisi alınamadı' };
+    }
+
+    let stocks = marketData.data.all;
+
+    if (params.minChange !== undefined) stocks = stocks.filter(s => s.changePercent >= params.minChange!);
+    if (params.maxChange !== undefined) stocks = stocks.filter(s => s.changePercent <= params.maxChange!);
+    if (params.minVolume !== undefined) stocks = stocks.filter(s => s.volume >= params.minVolume!);
+
+    const top = stocks.slice(0, 20);
+    return {
+      success: true,
+      data: {
+        matches: top,
+        count: top.length,
+        totalScanned: marketData.data.all.length,
+        filters: params,
+      },
+    };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 // Tool Executor
 async function executeTool(toolName: string, params: Record<string, unknown>, userId: string | null) {
   const startTime = Date.now();
@@ -838,6 +1150,21 @@ async function executeTool(toolName: string, params: Record<string, unknown>, us
       break;
     case 'analyze_chart_image':
       result = await analyzeChartImage(params.imageBase64 as string, params.symbol as string | undefined);
+      break;
+    case 'analyze_portfolio':
+      result = await analyzePortfolio(userId);
+      break;
+    case 'compare_stocks':
+      result = await compareStocks(params.symbols as string[]);
+      break;
+    case 'technical_indicators':
+      result = await technicalIndicators(params.symbol as string, params.period as string | undefined);
+      break;
+    case 'get_economic_calendar':
+      result = await getEconomicCalendar(params.days as number | undefined);
+      break;
+    case 'stock_screener':
+      result = await stockScreener(params as { minChange?: number; maxChange?: number; minVolume?: number; sector?: string });
       break;
     default:
       result = { success: false, error: `Bilinmeyen tool: ${toolName}` };
@@ -960,6 +1287,53 @@ function selectToolsForQuery(message: string): {
       params[`web_search_${symbol}`] = { query: `${symbol} hisse analiz haber yorum` };
     }
     return { tools: [...new Set(tools)], params, queryType: 'portfolio_question', queryMeta: { symbols } };
+  }
+
+  // === PORTFOLIO ANALYSIS ===
+  if (lowerMessage.includes('portföy') && (lowerMessage.includes('analiz') || lowerMessage.includes('durum') || lowerMessage.includes('takip'))) {
+    tools.push('analyze_portfolio');
+    params['analyze_portfolio'] = {};
+    return { tools, params, queryType: 'portfolio_analysis', queryMeta: {} };
+  }
+
+  // === STOCK COMPARISON ===
+  if ((lowerMessage.includes('karşılaştır') || lowerMessage.includes('vs') || lowerMessage.includes('farkı')) && symbols.length >= 2) {
+    tools.push('compare_stocks');
+    params['compare_stocks'] = { symbols };
+    return { tools, params, queryType: 'comparison', queryMeta: { symbols } };
+  }
+
+  // === TECHNICAL INDICATORS ===
+  if ((lowerMessage.includes('rsi') || lowerMessage.includes('bollinger') || lowerMessage.includes('teknik gösterge') || lowerMessage.includes('sma') || lowerMessage.includes('macd')) && symbols.length > 0) {
+    tools.push('technical_indicators');
+    params['technical_indicators'] = { symbol: symbols[0], period: '3M' };
+    tools.push('get_stock_price');
+    params[`get_stock_price_${symbols[0]}`] = { symbol: symbols[0] };
+    return { tools, params, queryType: 'technical', queryMeta: { symbols } };
+  }
+
+  // === ECONOMIC CALENDAR ===
+  if (lowerMessage.includes('tcmb') || lowerMessage.includes('faiz kararı') || lowerMessage.includes('bilanço') || lowerMessage.includes('takvim') || lowerMessage.includes('ekonomi takvim')) {
+    tools.push('get_economic_calendar');
+    params['get_economic_calendar'] = { days: 30 };
+    tools.push('web_search');
+    params['web_search_econ'] = { query: 'TCMB BIST ekonomi takvim 2025' };
+    return { tools, params, queryType: 'economic_calendar', queryMeta: {} };
+  }
+
+  // === STOCK SCREENER ===
+  if (lowerMessage.includes('filtrele') || lowerMessage.includes('tara') || lowerMessage.includes('tarayıcı') ||
+      (lowerMessage.includes('hacmi yüksek') && (lowerMessage.includes('yükselen') || lowerMessage.includes('düşen')))) {
+    const minChangeMatch = message.match(/min.*?(%|\s)([\d.]+)/i);
+    const minVolumeMatch = message.match(/hacim.*?([\d.]+)/i);
+    tools.push('stock_screener');
+    params['stock_screener'] = {
+      minChange: lowerMessage.includes('yükselen') ? 1 : undefined,
+      maxChange: lowerMessage.includes('düşen') ? -1 : undefined,
+      minVolume: minVolumeMatch ? parseFloat(minVolumeMatch[1]) : undefined,
+    };
+    if (minChangeMatch) (params['stock_screener'] as Record<string, unknown>).minChange = parseFloat(minChangeMatch[2]);
+    return { tools, params, queryType: 'screener', queryMeta: {} };
   }
 
   // === WHERE TO INVEST TODAY ===
@@ -1170,11 +1544,27 @@ export async function POST(request: NextRequest) {
       imageBase64,
       imageSymbol,
       confirmActions,   // PendingAction[] — user approved these actions
+      enabledTools,     // string[] — UI'dan seçilen araç kategorisi araçları
     } = body;
 
     if (!message && !txtContent && !imageBase64 && !confirmActions) {
       return NextResponse.json({ success: false, error: 'Mesaj, dosya veya resim gerekli' }, { status: 400 });
     }
+
+    // ── Rate Limiting ─────────────────────────────────────────────────────
+    const { throttled, maxTokens: allowedTokens } = checkRateLimit(userId);
+    if (throttled) {
+      // Günlük bütçe tükendi — sessizce kısa yanıt ver
+      return NextResponse.json({
+        success: true,
+        response: '📊 Şu an yoğun kullanım var, biraz sonra tekrar dene.',
+        messages: ['📊 Şu an yoğun kullanım var, biraz sonra tekrar dene.'],
+        suggestedQuestions: [],
+        toolsUsed: [],
+        timestamp: new Date().toISOString(),
+      });
+    }
+    // ─────────────────────────────────────────────────────────────────────
 
     // ── Confirmed actions path ────────────────────────────────────────────
     if (confirmActions && Array.isArray(confirmActions) && confirmActions.length > 0) {
@@ -1239,11 +1629,16 @@ export async function POST(request: NextRequest) {
     }
 
     // Intelligent tool selection
-    const { tools, params, queryType, queryMeta } = selectToolsForQuery(message);
+    const { tools: rawTools, params, queryType, queryMeta } = selectToolsForQuery(message);
     console.log('🎯 Query type:', queryType, '| Meta:', queryMeta);
 
+    // Filter tools by user-selected categories (if any)
+    const tools = (enabledTools && Array.isArray(enabledTools) && enabledTools.length > 0)
+      ? rawTools.filter((t: string) => enabledTools.includes(t))
+      : rawTools;
+
     // Separate immediate tools from those requiring user confirmation
-    const immediateTools = tools.filter(t => !CONFIRMATION_REQUIRED_TOOLS.includes(t));
+    const immediateTools = tools.filter((t: string) => !CONFIRMATION_REQUIRED_TOOLS.includes(t));
     const pendingActions: PendingAction[] = tools
       .filter(t => CONFIRMATION_REQUIRED_TOOLS.includes(t))
       .map(t => ({
@@ -1353,7 +1748,7 @@ SORULAR: GARAN 3 ay sonraki fiyatı ne olur? | AKBNK ile karşılaştırır mıs
           { role: 'user', content: userPromptContent },
         ],
         temperature: 0.7,
-        max_tokens: 1500,
+        max_tokens: allowedTokens,  // dynamic: soft throttle reduces this
       }),
     });
 
@@ -1362,6 +1757,9 @@ SORULAR: GARAN 3 ay sonraki fiyatı ne olur? | AKBNK ile karşılaştırır mıs
     if (finalResponse.ok) {
       const finalData = await finalResponse.json();
       rawText = finalData.choices?.[0]?.message?.content || '';
+      // Record token usage for budget tracking
+      const usage = finalData.usage?.total_tokens ?? 0;
+      if (usage > 0) recordTokenUsage(userId, usage);
     } else {
       rawText = `İşlem tamamlandı. Araçlar: ${immediateTools.join(', ')}`;
     }
