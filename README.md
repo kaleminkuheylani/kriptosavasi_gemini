@@ -1,6 +1,7 @@
-# BIST 100 AI Finans Asistani
+# BIST 100 Egitimsel Finans Platformu
 
-BIST 100 hisse senetleri icin yapay zeka destekli finansal analiz platformu.
+BIST 100 hisse senetleri icin egitim odakli veri ve teknik gosterge platformu.
+Bu proje yatirim tavsiyesi vermez; tum icerikler finansal okuryazarlik amaciyla sunulur.
 
 ## Ozellikler
 
@@ -8,10 +9,10 @@ BIST 100 hisse senetleri icin yapay zeka destekli finansal analiz platformu.
 - Canli BIST 100 hisse fiyatlari
 - Gecmis fiyat verileri ve grafikler
 - Teknik analiz gostergeleri (SMA, trend)
-- AI destekli grafik analizi (VLM)
+- Grafik ve gosterge okuma araclari
 
-### AI Finans Asistani
-- 15 farkli AI araci
+### Egitimsel Analiz Asistani
+- 15 farkli analiz araci
 - Hisse fiyati sorgulama
 - Piyasa tarama
 - KAP bildirimleri
@@ -65,9 +66,9 @@ Uygulama http://localhost:3000 adresinde calisacaktir.
 | /api/auth | GET/POST/DELETE | Kullanici islemleri |
 | /api/watchlist | CRUD | Takip listesi |
 | /api/alerts | CRUD | Fiyat bildirimleri |
-| /api/agent | POST | AI Agent |
+| /api/agent | POST | Egitimsel Analiz Asistani |
 
-## AI Agent Araclari
+## Egitimsel Asistan Araclari
 
 1. get_stock_price - Hisse fiyati
 2. get_stock_history - Gecmis veriler
@@ -91,7 +92,7 @@ Uygulama http://localhost:3000 adresinde calisacaktir.
 src/
 ├── app/
 │   ├── api/
-│   │   ├── agent/route.ts      # AI Agent
+│   │   ├── agent/route.ts      # Egitimsel Analiz Asistani
 │   │   ├── auth/route.ts       # Kimlik dogrulama
 │   │   ├── alerts/route.ts     # Bildirimler
 │   │   ├── watchlist/route.ts  # Takip listesi

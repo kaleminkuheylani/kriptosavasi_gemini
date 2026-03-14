@@ -74,15 +74,13 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ success: true, data, sectors: [...sectors], timestamp: new Date().toISOString() });
   }
 
-  // ── Önerilen ─────────────────────────────────────────────────────────────
-  if (type === 'recommended') {
+  // ── Iliskili hisseler (sektor benzerligi) ───────────────────────────────
+  if (type === 'recommended' || type === 'related') {
     const userSymbols = (searchParams.get('symbols') ?? '')
       .split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
 
     if (userSymbols.length === 0) {
-      const data = [...stocks].filter(s => s.changePercent > 0)
-        .sort((a, b) => b.changePercent - a.changePercent).slice(0, 5);
-      return NextResponse.json({ success: true, data, reason: 'top_gainers', timestamp: new Date().toISOString() });
+      return NextResponse.json({ success: true, data: [], reason: 'no_reference_symbols', timestamp: new Date().toISOString() });
     }
 
     const userStocks = userSymbols.map(sym => stocks.find(s => s.code === sym)).filter(Boolean) as typeof stocks;

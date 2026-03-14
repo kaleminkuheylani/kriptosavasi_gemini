@@ -1049,12 +1049,12 @@ function calcTechnicalIndicators(closes: number[]) {
 
   const lastClose = closes[closes.length - 1];
 
-  // Signal
+  // Composite educational status (no buy/sell phrasing)
   let signal = 'NÖTR';
-  if (rsi < 30 && lastClose <= bbLower) signal = 'GÜÇLÜ ALIM';
-  else if (rsi < 40) signal = 'ALIM ZONU';
-  else if (rsi > 70 && lastClose >= bbUpper) signal = 'GÜÇLÜ SATIM';
-  else if (rsi > 60) signal = 'SATIM ZONU';
+  if (rsi < 30 && lastClose <= bbLower) signal = 'GÜÇLÜ POZİTİF MOMENTUM';
+  else if (rsi < 40) signal = 'POZİTİF MOMENTUM BÖLGESİ';
+  else if (rsi > 70 && lastClose >= bbUpper) signal = 'GÜÇLÜ NEGATİF MOMENTUM';
+  else if (rsi > 60) signal = 'NEGATİF MOMENTUM BÖLGESİ';
 
   return {
     rsi,
@@ -1138,8 +1138,8 @@ function calcStochasticIndicator(highs: number[], lows: number[], closes: number
   const lastClose = closes[closes.length - 1];
   const k = highestHigh === lowestLow ? 50 : +((lastClose - lowestLow) / (highestHigh - lowestLow) * 100).toFixed(2);
   let signal = 'NÖTR';
-  if (k < 20) signal = 'AŞIRI SATIM';
-  else if (k > 80) signal = 'AŞIRI ALIM';
+  if (k < 20) signal = 'AŞIRI DÜŞÜK BÖLGE';
+  else if (k > 80) signal = 'AŞIRI YÜKSEK BÖLGE';
   return { k, signal };
 }
 
@@ -1178,8 +1178,8 @@ function calcWilliamsR(highs: number[], lows: number[], closes: number[], period
   const lastClose = closes[closes.length - 1];
   const r = highestHigh === lowestLow ? -50 : +((highestHigh - lastClose) / (highestHigh - lowestLow) * -100).toFixed(2);
   let signal = 'NÖTR';
-  if (r > -20) signal = 'AŞIRI ALIM';
-  else if (r < -80) signal = 'AŞIRI SATIM';
+  if (r > -20) signal = 'AŞIRI YÜKSEK BÖLGE';
+  else if (r < -80) signal = 'AŞIRI DÜŞÜK BÖLGE';
   return { value: r, signal };
 }
 
@@ -1194,8 +1194,8 @@ function calcCCIIndicator(highs: number[], lows: number[], closes: number[], per
   const lastTypical = (highs[highs.length - 1] + lows[lows.length - 1] + closes[closes.length - 1]) / 3;
   const cci = meanDev === 0 ? 0 : +((lastTypical - mean) / (0.015 * meanDev)).toFixed(2);
   let signal = 'NÖTR';
-  if (cci > 100) signal = 'AŞIRI ALIM';
-  else if (cci < -100) signal = 'AŞIRI SATIM';
+  if (cci > 100) signal = 'AŞIRI YÜKSEK BÖLGE';
+  else if (cci < -100) signal = 'AŞIRI DÜŞÜK BÖLGE';
   return { value: cci, signal };
 }
 
@@ -1246,17 +1246,17 @@ function calcDeepMathIndicators(closes: number[], highs: number[], lows: number[
   // Composite signal scoring
   let bullSignals = 0, bearSignals = 0;
   if (macd?.trend === 'YUKARI') bullSignals++; else if (macd?.trend === 'AŞAĞI') bearSignals++;
-  if (stochastic?.signal === 'AŞIRI SATIM') bullSignals++; else if (stochastic?.signal === 'AŞIRI ALIM') bearSignals++;
-  if (williamsR?.signal === 'AŞIRI SATIM') bullSignals++; else if (williamsR?.signal === 'AŞIRI ALIM') bearSignals++;
-  if (cci?.signal === 'AŞIRI SATIM') bullSignals++; else if (cci?.signal === 'AŞIRI ALIM') bearSignals++;
+  if (stochastic?.signal === 'AŞIRI DÜŞÜK BÖLGE') bullSignals++; else if (stochastic?.signal === 'AŞIRI YÜKSEK BÖLGE') bearSignals++;
+  if (williamsR?.signal === 'AŞIRI DÜŞÜK BÖLGE') bullSignals++; else if (williamsR?.signal === 'AŞIRI YÜKSEK BÖLGE') bearSignals++;
+  if (cci?.signal === 'AŞIRI DÜŞÜK BÖLGE') bullSignals++; else if (cci?.signal === 'AŞIRI YÜKSEK BÖLGE') bearSignals++;
   if (momentum?.trend === 'POZİTİF') bullSignals++; else if (momentum?.trend === 'NEGATİF') bearSignals++;
   if (obv?.trend === 'POZİTİF') bullSignals++; else if (obv?.trend === 'NEGATİF') bearSignals++;
 
   let compositeSignal = 'NÖTR';
-  if (bullSignals >= 4) compositeSignal = 'GÜÇLÜ ALIM';
-  else if (bullSignals >= 3) compositeSignal = 'ALIM';
-  else if (bearSignals >= 4) compositeSignal = 'GÜÇLÜ SATIM';
-  else if (bearSignals >= 3) compositeSignal = 'SATIM';
+  if (bullSignals >= 4) compositeSignal = 'GÜÇLÜ POZİTİF MOMENTUM';
+  else if (bullSignals >= 3) compositeSignal = 'POZİTİF MOMENTUM';
+  else if (bearSignals >= 4) compositeSignal = 'GÜÇLÜ NEGATİF MOMENTUM';
+  else if (bearSignals >= 3) compositeSignal = 'NEGATİF MOMENTUM';
 
   return { macd, stochastic, atr, fibonacci, williamsR, cci, momentum, volatility, obv, compositeSignal, bullSignals, bearSignals };
 }
@@ -1497,7 +1497,7 @@ function selectToolsForQuery(message: string): {
       params[`get_kap_data_${symbol}`] = { symbol };
       tools.push('web_search');
       params[`web_search_pred_${symbol}`] = {
-        query: `${symbol} hisse hedef fiyat analist tahmin 2025`,
+        query: `${symbol} hisse teknik veri raporu 2025`,
       };
     }
     return { tools: [...new Set(tools)], params, queryType: 'price_prediction', queryMeta: { symbols, periodDays } };
@@ -1513,7 +1513,7 @@ function selectToolsForQuery(message: string): {
       params[`get_kap_data_${symbol}`] = { symbol };
       tools.push('web_search');
       params[`web_search_sell_${symbol}`] = {
-        query: `${symbol} hisse sat analiz hedef fiyat 2025`,
+        query: `${symbol} hisse risk getiri analizi 2025`,
       };
     }
     return { tools: [...new Set(tools)], params, queryType: 'sell_decision', queryMeta: { symbols } };
@@ -1528,7 +1528,7 @@ function selectToolsForQuery(message: string): {
     params['get_top_losers'] = { limit: 10 };
     tools.push('web_search');
     params['web_search_budget'] = {
-      query: `BIST yatırım fırsatları portföy önerisi ${budgetAmount ? budgetAmount + ' TL' : ''}`,
+      query: `BIST sektor dagilimi risk yonetimi egitim ${budgetAmount ? budgetAmount + ' TL' : ''}`,
     };
     return { tools: [...new Set(tools)], params, queryType: 'budget_advice', queryMeta: { budgetAmount } };
   }
@@ -1606,7 +1606,7 @@ function selectToolsForQuery(message: string): {
     return { tools, params, queryType: 'screener', queryMeta: {} };
   }
 
-  // === WHERE TO INVEST TODAY ===
+  // === MARKET OVERVIEW INTENT ===
   if (lowerMessage.includes('nereye') || lowerMessage.includes('yatırım') ||
       lowerMessage.includes('öneri') || lowerMessage.includes('hangi hisse') ||
       lowerMessage.includes('bugün ne')) {
@@ -1619,7 +1619,7 @@ function selectToolsForQuery(message: string): {
     tools.push('get_kap_data');
     params['get_kap_data'] = {};
     tools.push('web_search');
-    params['web_search_market'] = { query: 'BIST borsa piyasa analiz bugün öneri' };
+    params['web_search_market'] = { query: 'BIST borsa piyasa ozeti bugun' };
     return { tools: [...new Set(tools)], params, queryType: 'market_overview', queryMeta: {} };
   }
 
@@ -1992,7 +1992,7 @@ ${buildToolResultsText(toolResults)}
 
 THREAD FORMAT: Yanıtını "|||" ile ayırdığın 3 kısa mesaj olarak ver:
 Mesaj 1 — 📈 Mevcut durum + trend (3-4 madde, kısa)
-Mesaj 2 — 🎯 Analist hedefleri + tahmin senaryoları
+Mesaj 2 — 🎯 Veri temelli senaryolar (kesinlik belirtmeden)
 Mesaj 3 — ⚠️ Risk faktörleri + not${pendingNote}`;
     } else if (queryType === 'sell_decision') {
       const { symbols: syms } = queryMeta as { symbols: string[] };
@@ -2015,8 +2015,8 @@ Araç Sonuçları:
 ${buildToolResultsText(toolResults)}
 
 THREAD FORMAT: Yanıtını "|||" ile ayırdığın 3 kısa mesaj olarak ver:
-Mesaj 1 — 💰 Piyasa durumu + fırsat özeti (3-4 madde)
-Mesaj 2 — 📋 Sektör dağılımı görünümü${budget ? ` (${budget.toLocaleString('tr-TR')} TL için)` : ''} + öne çıkan hisselerin veri özeti
+Mesaj 1 — 💰 Piyasa durumu + genel görünüm özeti (3-4 madde)
+Mesaj 2 — 📋 Sektör dağılımı görünümü${budget ? ` (${budget.toLocaleString('tr-TR')} TL için)` : ''} + örnek veri seti özeti
 Mesaj 3 — ⚠️ Risk uyarısı + not${pendingNote}`;
     } else {
       userPromptContent = `Kullanıcı Sorusu: "${message}"
@@ -2027,19 +2027,19 @@ ${buildToolResultsText(toolResults)}
 THREAD FORMAT: Yanıtını "|||" ile ayırdığın 2-3 kısa mesaj olarak ver. Her mesaj kısa ve odaklı olsun.${pendingNote}`;
     }
 
-    const systemPrompt = `Sen profesyonel bir BIST hisse analiz asistanısın. Türkçe yanıt ver.
+    const systemPrompt = `Sen egitim odakli bir BIST veri analiz asistanisin. Turkce yanit ver.
 Yalnızca objektif, veri-temelli analiz yap. Yatırım tavsiyesi, öneri veya yönlendirme verme.
-Al/Sat/Tut gibi eylem çağrısı içeren ifadeler kullanma. "Sinyal" yerine "gösterge durumu" ifadesini tercih et.
+Yonlendirici eylem cagrisi iceren ifadeler kullanma. "Sinyal" yerine "gösterge durumu" ifadesini tercih et.
 Emoji kullan ama abartma. Her mesaj maksimum 5 madde içersin.
 
 Matematiksel göstergeler varsa şu şekilde yorumla:
-- RSI < 30 = aşırı satım bölgesi | RSI > 70 = aşırı alım bölgesi
+- RSI < 30 = asiri dusuk bolge | RSI > 70 = asiri yuksek bolge
 - MACD histogramı pozitif = yükseliş baskısı | negatif = düşüş baskısı
-- Stochastic %K < 20 = aşırı satım | %K > 80 = aşırı alım
+- Stochastic %K < 20 = asiri dusuk bolge | %K > 80 = asiri yuksek bolge
 - ATR% = günlük volatilite tahmini olarak kullan
 - Fibonacci seviyeleri destek/direnç noktası olarak göster
-- Williams %R < -80 = aşırı satım | > -20 = aşırı alım
-- CCI < -100 = aşırı satım | > 100 = aşırı alım
+- Williams %R < -80 = asiri dusuk bolge | > -20 = asiri yuksek bolge
+- CCI < -100 = asiri dusuk bolge | > 100 = asiri yuksek bolge
 - Bileşik Durum (compositeSignal): birden fazla göstergenin ortalamasını yansıtır
 - OBV trendi: hacimle fiyat hareketi tutarlılığını gösterir
 
