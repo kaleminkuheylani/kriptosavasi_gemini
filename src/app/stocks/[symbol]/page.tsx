@@ -12,6 +12,7 @@ import {
   MessageSquare,
   Newspaper,
   RefreshCw,
+  Sparkles,
   Star,
   StarOff,
   TrendingDown,
@@ -159,6 +160,165 @@ function calculateVolatility(values: number[]): number | null {
   const variance = returns.reduce((acc, item) => acc + (item - mean) ** 2, 0) / returns.length;
   const dailyStd = Math.sqrt(variance);
   return dailyStd * Math.sqrt(252) * 100;
+}
+
+function calculateEMA(values: number[], period: number): number[] {
+  if (values.length === 0) return [];
+  const k = 2 / (period + 1);
+  const ema = [values[0]];
+  for (let i = 1; i < values.length; i++) {
+    ema.push(values[i] * k + ema[i - 1] * (1 - k));
+  }
+  return ema;
+}
+
+function calculateMACD(values: number[]) {
+  if (values.length < 35) return null;
+  const ema12 = calculateEMA(values, 12);
+  const ema26 = calculateEMA(values, 26);
+  const macdLine = ema12.map((v, i) => v - ema26[i]);
+  const signalLine = calculateEMA(macdLine.slice(25), 9);
+  if (signalLine.length < 2 || macdLine.length < 2) return null;
+
+  const lastMacd = macdLine[macdLine.length - 1];
+  const lastSignal = signalLine[signalLine.length - 1];
+  const prevMacd = macdLine[macdLine.length - 2];
+  const prevSignal = signalLine[signalLine.length - 2];
+  let crossSignal: 'BULLISH' | 'BEARISH' | null = null;
+  if (prevMacd < prevSignal && lastMacd > lastSignal) crossSignal = 'BULLISH';
+  if (prevMacd > prevSignal && lastMacd < lastSignal) crossSignal = 'BEARISH';
+
+  return {
+    value: +lastMacd.toFixed(3),
+    signal: +lastSignal.toFixed(3),
+    histogram: +(lastMacd - lastSignal).toFixed(3),
+    trend: lastMacd > lastSignal ? 'YUKARI' : 'ASAGI',
+    crossSignal,
+  };
+}
+
+function calculateStochastic(highs: number[], lows: number[], closes: number[], period = 14) {
+  if (closes.length < period) return null;
+  const highestHigh = Math.max(...highs.slice(-period));
+  const lowestLow = Math.min(...lows.slice(-period));
+  const lastClose = closes[closes.length - 1];
+  if (highestHigh === lowestLow) return { value: 50, signal: 'NOTR' };
+
+  const k = +(((lastClose - lowestLow) / (highestHigh - lowestLow)) * 100).toFixed(2);
+  if (k < 20) return { value: k, signal: 'ASIRI_SATIM' };
+  if (k > 80) return { value: k, signal: 'ASIRI_ALIM' };
+  return { value: k, signal: 'NOTR' };
+}
+
+function calculateATR(highs: number[], lows: number[], closes: number[], period = 14) {
+  if (closes.length < period + 1) return null;
+  const trueRanges: number[] = [];
+  for (let i = 1; i < closes.length; i++) {
+    trueRanges.push(
+      Math.max(
+        highs[i] - lows[i],
+        Math.abs(highs[i] - closes[i - 1]),
+        Math.abs(lows[i] - closes[i - 1])
+      )
+    );
+  }
+  const atr = trueRanges.slice(-period).reduce((acc, val) => acc + val, 0) / period;
+  const lastClose = closes[closes.length - 1];
+  return { value: +atr.toFixed(2), percent: +((atr / lastClose) * 100).toFixed(2) };
+}
+
+function calculateFibonacci(values: number[]) {
+  if (values.length < 2) return null;
+  const lookback = values.slice(-Math.min(values.length, 90));
+  const high = Math.max(...lookback);
+  const low = Math.min(...lookback);
+  const diff = high - low;
+  return {
+    high: +high.toFixed(2),
+    low: +low.toFixed(2),
+    r236: +(high - diff * 0.236).toFixed(2),
+    r382: +(high - diff * 0.382).toFixed(2),
+    r500: +(high - diff * 0.5).toFixed(2),
+    r618: +(high - diff * 0.618).toFixed(2),
+  };
+}
+
+function calculateWilliamsR(highs: number[], lows: number[], closes: number[], period = 14) {
+  if (closes.length < period) return null;
+  const highestHigh = Math.max(...highs.slice(-period));
+  const lowestLow = Math.min(...lows.slice(-period));
+  const lastClose = closes[closes.length - 1];
+  if (highestHigh === lowestLow) return { value: -50, signal: 'NOTR' };
+
+  const r = +(((highestHigh - lastClose) / (highestHigh - lowestLow)) * -100).toFixed(2);
+  if (r > -20) return { value: r, signal: 'ASIRI_ALIM' };
+  if (r < -80) return { value: r, signal: 'ASIRI_SATIM' };
+  return { value: r, signal: 'NOTR' };
+}
+
+function calculateCCI(highs: number[], lows: number[], closes: number[], period = 20) {
+  if (closes.length < period) return null;
+  const typical = Array.from({ length: period }, (_, idx) => {
+    const i = closes.length - period + idx;
+    return (highs[i] + lows[i] + closes[i]) / 3;
+  });
+  const mean = typical.reduce((acc, val) => acc + val, 0) / period;
+  const meanDev = typical.reduce((acc, val) => acc + Math.abs(val - mean), 0) / period;
+  const lastTypical = (highs[highs.length - 1] + lows[lows.length - 1] + closes[closes.length - 1]) / 3;
+  const cci = meanDev === 0 ? 0 : +(((lastTypical - mean) / (0.015 * meanDev)).toFixed(2));
+
+  if (cci > 100) return { value: cci, signal: 'ASIRI_ALIM' };
+  if (cci < -100) return { value: cci, signal: 'ASIRI_SATIM' };
+  return { value: cci, signal: 'NOTR' };
+}
+
+function calculateROC(values: number[], period = 10) {
+  if (values.length < period + 1) return null;
+  const latest = values[values.length - 1];
+  const prev = values[values.length - 1 - period];
+  const roc = +(((latest - prev) / prev) * 100).toFixed(2);
+  return { value: roc, trend: roc >= 0 ? 'POZITIF' : 'NEGATIF' };
+}
+
+function calculateOBV(closes: number[], volumes: number[]) {
+  if (closes.length < 2) return null;
+  let obv = 0;
+  const obvSeries: number[] = [0];
+  for (let i = 1; i < closes.length; i++) {
+    if (closes[i] > closes[i - 1]) obv += volumes[i];
+    else if (closes[i] < closes[i - 1]) obv -= volumes[i];
+    obvSeries.push(obv);
+  }
+  return {
+    value: Math.round(obv),
+    trend: obvSeries[obvSeries.length - 1] >= obvSeries[0] ? 'POZITIF' : 'NEGATIF',
+  };
+}
+
+function composeDeepSignal(input: {
+  macdTrend?: string;
+  stochasticSignal?: string;
+  williamsSignal?: string;
+  cciSignal?: string;
+  rocTrend?: string;
+  obvTrend?: string;
+}) {
+  let bull = 0;
+  let bear = 0;
+  if (input.macdTrend === 'YUKARI') bull++; else if (input.macdTrend === 'ASAGI') bear++;
+  if (input.stochasticSignal === 'ASIRI_SATIM') bull++; else if (input.stochasticSignal === 'ASIRI_ALIM') bear++;
+  if (input.williamsSignal === 'ASIRI_SATIM') bull++; else if (input.williamsSignal === 'ASIRI_ALIM') bear++;
+  if (input.cciSignal === 'ASIRI_SATIM') bull++; else if (input.cciSignal === 'ASIRI_ALIM') bear++;
+  if (input.rocTrend === 'POZITIF') bull++; else if (input.rocTrend === 'NEGATIF') bear++;
+  if (input.obvTrend === 'POZITIF') bull++; else if (input.obvTrend === 'NEGATIF') bear++;
+
+  let composite = 'NOTR';
+  if (bull >= 4) composite = 'GUCLU_ALIM';
+  else if (bull >= 3) composite = 'ALIM';
+  else if (bear >= 4) composite = 'GUCLU_SATIM';
+  else if (bear >= 3) composite = 'SATIM';
+
+  return { bull, bear, composite };
 }
 
 export default function StockDetailPage() {
@@ -317,6 +477,43 @@ export default function StockDetailPage() {
   const sma50 = useMemo(() => calculateSMA(closeSeries, 50), [closeSeries]);
   const rsi14 = useMemo(() => calculateRSI(closeSeries, 14), [closeSeries]);
   const volatility = useMemo(() => calculateVolatility(closeSeries), [closeSeries]);
+  const deepAnalysis = useMemo(() => {
+    if (historicalData.length < 20) return null;
+    const closes = historicalData.map(item => item.close);
+    const highs = historicalData.map(item => item.high);
+    const lows = historicalData.map(item => item.low);
+    const volumes = historicalData.map(item => item.volume);
+
+    const macd = calculateMACD(closes);
+    const stochastic = calculateStochastic(highs, lows, closes);
+    const atr = calculateATR(highs, lows, closes);
+    const fibonacci = calculateFibonacci(closes);
+    const williamsR = calculateWilliamsR(highs, lows, closes);
+    const cci = calculateCCI(highs, lows, closes);
+    const roc = calculateROC(closes);
+    const obv = calculateOBV(closes, volumes);
+
+    const score = composeDeepSignal({
+      macdTrend: macd?.trend,
+      stochasticSignal: stochastic?.signal,
+      williamsSignal: williamsR?.signal,
+      cciSignal: cci?.signal,
+      rocTrend: roc?.trend,
+      obvTrend: obv?.trend,
+    });
+
+    return {
+      macd,
+      stochastic,
+      atr,
+      fibonacci,
+      williamsR,
+      cci,
+      roc,
+      obv,
+      ...score,
+    };
+  }, [historicalData]);
 
   const periodPerformance = useMemo(() => {
     if (historicalData.length < 2) return null;
@@ -755,6 +952,122 @@ export default function StockDetailPage() {
             </CardContent>
           </Card>
         </div>
+
+        <Card className="border-slate-800 bg-slate-900">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-violet-400" />
+              Derinlik Analiz Araci (Ajan Benzeri)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {deepAnalysis ? (
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge
+                    className={
+                      deepAnalysis.composite === 'GUCLU_ALIM'
+                        ? 'bg-emerald-600/20 text-emerald-400'
+                        : deepAnalysis.composite === 'ALIM'
+                        ? 'bg-emerald-500/20 text-emerald-300'
+                        : deepAnalysis.composite === 'GUCLU_SATIM'
+                        ? 'bg-red-600/20 text-red-400'
+                        : deepAnalysis.composite === 'SATIM'
+                        ? 'bg-red-500/20 text-red-300'
+                        : 'bg-slate-700 text-slate-200'
+                    }
+                  >
+                    Bilesik Sinyal: {deepAnalysis.composite.replaceAll('_', ' ')}
+                  </Badge>
+                  <Badge variant="secondary" className="bg-slate-800 text-slate-300">
+                    Bull: {deepAnalysis.bull}
+                  </Badge>
+                  <Badge variant="secondary" className="bg-slate-800 text-slate-300">
+                    Bear: {deepAnalysis.bear}
+                  </Badge>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4 text-sm">
+                  <div className="rounded-lg bg-slate-800/50 p-3">
+                    <p className="text-slate-300">MACD</p>
+                    <p className="font-medium text-white">
+                      {deepAnalysis.macd ? `${deepAnalysis.macd.value} / ${deepAnalysis.macd.signal}` : '-'}
+                    </p>
+                    <p className="text-xs text-slate-400">
+                      {deepAnalysis.macd ? `Hist: ${deepAnalysis.macd.histogram}` : ''}
+                    </p>
+                  </div>
+                  <div className="rounded-lg bg-slate-800/50 p-3">
+                    <p className="text-slate-300">Stochastic %K</p>
+                    <p className="font-medium text-white">
+                      {deepAnalysis.stochastic ? `${formatNumber(deepAnalysis.stochastic.value)} (${deepAnalysis.stochastic.signal})` : '-'}
+                    </p>
+                  </div>
+                  <div className="rounded-lg bg-slate-800/50 p-3">
+                    <p className="text-slate-300">ATR</p>
+                    <p className="font-medium text-white">
+                      {deepAnalysis.atr ? `${formatNumber(deepAnalysis.atr.value)} (${formatNumber(deepAnalysis.atr.percent)}%)` : '-'}
+                    </p>
+                  </div>
+                  <div className="rounded-lg bg-slate-800/50 p-3">
+                    <p className="text-slate-300">ROC (10)</p>
+                    <p className={`font-medium ${deepAnalysis.roc?.value && deepAnalysis.roc.value >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {deepAnalysis.roc ? `${deepAnalysis.roc.value >= 0 ? '+' : ''}${formatNumber(deepAnalysis.roc.value)}%` : '-'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2 text-sm">
+                  <div className="rounded-lg bg-slate-800/40 p-3">
+                    <p className="mb-2 font-medium text-white">Fibonacci Seviyeleri</p>
+                    {deepAnalysis.fibonacci ? (
+                      <div className="space-y-1 text-slate-300">
+                        <div className="flex justify-between"><span>High</span><span>{formatNumber(deepAnalysis.fibonacci.high)} TL</span></div>
+                        <div className="flex justify-between"><span>0.236</span><span>{formatNumber(deepAnalysis.fibonacci.r236)} TL</span></div>
+                        <div className="flex justify-between"><span>0.382</span><span>{formatNumber(deepAnalysis.fibonacci.r382)} TL</span></div>
+                        <div className="flex justify-between"><span>0.500</span><span>{formatNumber(deepAnalysis.fibonacci.r500)} TL</span></div>
+                        <div className="flex justify-between"><span>0.618</span><span>{formatNumber(deepAnalysis.fibonacci.r618)} TL</span></div>
+                        <div className="flex justify-between"><span>Low</span><span>{formatNumber(deepAnalysis.fibonacci.low)} TL</span></div>
+                      </div>
+                    ) : (
+                      <p className="text-slate-400">Yeterli veri yok</p>
+                    )}
+                  </div>
+
+                  <div className="rounded-lg bg-slate-800/40 p-3">
+                    <p className="mb-2 font-medium text-white">Ek Gosterge Ozeti</p>
+                    <div className="space-y-1 text-slate-300">
+                      <div className="flex justify-between">
+                        <span>Williams %R</span>
+                        <span>{deepAnalysis.williamsR ? `${formatNumber(deepAnalysis.williamsR.value)} (${deepAnalysis.williamsR.signal})` : '-'}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>CCI</span>
+                        <span>{deepAnalysis.cci ? `${formatNumber(deepAnalysis.cci.value)} (${deepAnalysis.cci.signal})` : '-'}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>OBV</span>
+                        <span>{deepAnalysis.obv ? `${deepAnalysis.obv.value.toLocaleString('tr-TR')} (${deepAnalysis.obv.trend})` : '-'}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>MACD Trend</span>
+                        <span>{deepAnalysis.macd?.trend ?? '-'}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Volatilite (Yillik)</span>
+                        <span>{volatility ? `${formatNumber(volatility)}%` : '-'}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-slate-400">
+                Derinlik analiz icin en az 20 gunluk gecmis veri gerekli.
+              </p>
+            )}
+          </CardContent>
+        </Card>
 
         <Card className="border-slate-800 bg-slate-900">
           <CardHeader className="flex flex-row items-center justify-between gap-2">
