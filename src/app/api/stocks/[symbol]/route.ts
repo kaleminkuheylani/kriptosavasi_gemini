@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+// In-memory cache for stock detail + historical data
+const symbolCache: Record<string, { data: unknown; timestamp: number }> = {};
+const CACHE_TTL = 60 * 1000; // 1 minute
+
 interface StockDetail {
   code: string;
   name: string;
@@ -151,6 +155,13 @@ export async function GET(
     const time = searchParams.get('time') || '1M';
     const rangeSeconds = getRangeSeconds(time);
 
+    // Check cache
+    const cacheKey = `${code}_${time}`;
+    const cached = symbolCache[cacheKey];
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      return NextResponse.json({ ...cached.data, source: 'cache' });
+    }
+
     // Fetch stock detail from Asenax
     const detailResponse = await fetch(`https://api.asenax.com/bist/get/${code}`, {
       headers: {
@@ -189,7 +200,7 @@ export async function GET(
       historicalData = generateSimulatedData(stockDetail, time);
     }
 
-    return NextResponse.json({
+    const responseData = {
       success: true,
       data: {
         detail: stockDetail,
@@ -197,7 +208,11 @@ export async function GET(
       },
       timestamp: new Date().toISOString(),
       source: historicalData.length > 0 && historicalData[0].volume > 100000 ? 'finance-api' : 'simulated',
-    });
+    };
+
+    symbolCache[cacheKey] = { data: responseData, timestamp: Date.now() };
+
+    return NextResponse.json(responseData);
   } catch (error) {
     console.error('Stock detail fetch error:', error);
 

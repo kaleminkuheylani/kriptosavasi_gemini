@@ -162,21 +162,21 @@ Lütfen bu hisse için detaylı bir teknik analiz yap.`;
       userPrompt = `${symbol} hissesi için genel bir piyasa analizi yap. Bu hissenin BIST'teki performansı hakkında bilgi ver.`;
     }
 
-    // Call Groq API (OpenAI-compatible)
-    const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    // Call OpenAI gpt-4o-mini
+    const groqResponse = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.GROQ_API_KEY || 'gsk_demo'}`,
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY || process.env.GROQ_API_KEY || ''}`,
       },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: 'gpt-4o-mini',
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
         ],
         temperature: 0.7,
-        max_tokens: 2000,
+        max_tokens: 1500,
       }),
     });
 

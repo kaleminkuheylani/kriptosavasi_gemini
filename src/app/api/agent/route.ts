@@ -1,14 +1,116 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
 import ZAI from 'z-ai-web-dev-sdk';
 import { cookies } from 'next/headers';
+import { serverClient } from '@/lib/supabase';
 
-const prisma = new PrismaClient();
+// ─── Supabase client helper (uses user's session JWT for RLS) ────────────────
+async function getAgentSupabaseClient() {
+  const cs = await cookies();
+  const token = cs.get('sb-access-token')?.value ?? null;
+  return { sb: serverClient(token), token };
+}
 
-// Helper - Get current user
-async function getCurrentUserId() {
-  const cookieStore = await cookies();
-  return cookieStore.get('userId')?.value || null;
+// ─── Rate Limiting ────────────────────────────────────────────────────────────
+// In-memory for per-minute sliding window (too granular for DB)
+// Daily token budget is persisted in Supabase user_usage table
+
+interface RpmEntry { requests: number[] }
+const rpmStore = new Map<string, RpmEntry>();
+
+const LIMITS = {
+  user:  { rpm: 15, dailyTokens: 60_000 },
+  guest: { rpm:  5, dailyTokens: 15_000 },
+};
+
+/** Per-minute sliding window — checked synchronously, no DB needed */
+function checkRpm(userId: string | null): boolean {
+  const key = userId || 'guest';
+  const limits = userId ? LIMITS.user : LIMITS.guest;
+  if (!rpmStore.has(key)) rpmStore.set(key, { requests: [] });
+  const entry = rpmStore.get(key)!;
+  const now = Date.now();
+  entry.requests = entry.requests.filter(t => now - t < 60_000);
+  const over = entry.requests.length >= limits.rpm;
+  entry.requests.push(now);
+  return over; // true = throttled
+}
+
+/**
+ * Check + record daily usage in Supabase user_usage table.
+ * Returns { throttled, maxTokens }.
+ * Falls back to unthrottled on DB error so users aren't blocked by Supabase issues.
+ */
+async function checkAndRecordUsage(
+  userId: string | null,
+  sb: ReturnType<typeof serverClient>,
+): Promise<{ throttled: boolean; maxTokens: number }> {
+  const limits = userId ? LIMITS.user : LIMITS.guest;
+
+  // Guests: no DB tracking, just RPM
+  if (!userId) {
+    return { throttled: false, maxTokens: 1500 };
+  }
+
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+
+    const { data: row } = await sb
+      .from('user_usage')
+      .select('request_count, token_count')
+      .eq('user_id', userId)
+      .eq('date', today)
+      .maybeSingle();
+
+    const requestCount = (row?.request_count ?? 0) as number;
+    const tokenCount   = (row?.token_count   ?? 0) as number;
+
+    // Increment request counter
+    await sb.from('user_usage').upsert(
+      { user_id: userId, date: today, request_count: requestCount + 1, token_count: tokenCount },
+      { onConflict: 'user_id,date' }
+    );
+
+    if (tokenCount >= limits.dailyTokens) return { throttled: true,  maxTokens: 0   };
+    if (requestCount >= limits.rpm * 10)  return { throttled: false, maxTokens: 400 }; // soft
+    return { throttled: false, maxTokens: 1500 };
+  } catch {
+    return { throttled: false, maxTokens: 1500 }; // fail open
+  }
+}
+
+async function recordTokenUsage(
+  userId: string | null,
+  tokens: number,
+  sb: ReturnType<typeof serverClient>,
+) {
+  if (!userId || tokens <= 0) return;
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const { data: row } = await sb
+      .from('user_usage')
+      .select('token_count')
+      .eq('user_id', userId)
+      .eq('date', today)
+      .maybeSingle();
+
+    const prev = (row?.token_count ?? 0) as number;
+    await sb.from('user_usage').upsert(
+      { user_id: userId, date: today, token_count: prev + tokens },
+      { onConflict: 'user_id,date' }
+    );
+  } catch { /* ignore */ }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Get the authenticated Supabase user id from the session cookie */
+async function getCurrentUserId(): Promise<string | null> {
+  const cs = await cookies();
+  const token = cs.get('sb-access-token')?.value ?? null;
+  if (!token) return null;
+  try {
+    const { data: { user } } = await serverClient(token).auth.getUser();
+    return user?.id ?? null;
+  } catch { return null; }
 }
 
 // Tool Definitions
@@ -72,6 +174,31 @@ const TOOLS = {
   analyze_chart_image: {
     description: 'Hisse grafiği veya finansal grafik görselini VLM ile analiz eder. Trend, destek/direnç, formasyon tespiti yapar.',
     parameters: { imageBase64: 'string - Base64 encoded image', symbol: 'string - Hisse kodu (opsiyonel)' },
+  },
+  analyze_portfolio: {
+    description: 'Kullanıcının tüm takip listesi hisselerini analiz eder. Güncel fiyat, toplam değer, en iyi/kötü performer, portföy özeti döndürür.',
+    parameters: {},
+  },
+  compare_stocks: {
+    description: '2-5 hisseyi yan yana karşılaştırır: fiyat, günlük değişim, 1 aylık trend, hacim, SMA göstergeleri.',
+    parameters: { symbols: 'string[] - Karşılaştırılacak hisse kodları (örn: ["THYAO","GARAN","AKBNK"])' },
+  },
+  technical_indicators: {
+    description: 'Hisse için teknik göstergeleri hesaplar: RSI(14), SMA(20/50), Bollinger Bands. Al/Sat sinyali üretir.',
+    parameters: { symbol: 'string - Hisse kodu', period: 'string - 1M|3M|6M (varsayılan: 3M)' },
+  },
+  get_economic_calendar: {
+    description: 'Yaklaşan TCMB faiz kararları, BIST önemli açıklamalar, şirket bilanço takvimini getirir.',
+    parameters: { days: 'number - Önümüzdeki kaç gün (varsayılan: 30)' },
+  },
+  stock_screener: {
+    description: 'Kriterlere göre hisse filtreler ve tarar. Değişim yönü, hacim, fiyat aralığı, sektöre göre filtreleme yapar.',
+    parameters: {
+      minChange: 'number - Minimum değişim yüzdesi (örn: 2 = %2 üzeri yükselenler)',
+      maxChange: 'number - Maksimum değişim yüzdesi',
+      minVolume: 'number - Minimum işlem hacmi (lot)',
+      sector:    'string - Sektör filtresi (opsiyonel)',
+    },
   },
 };
 
@@ -245,8 +372,13 @@ async function getStockPriceEnhanced(symbol: string, userId: string | null) {
     }
   }
 
-  // Step 3: 1-month historical summary (parallel with step 4)
-  const [histResult, watchlistItem, activeAlerts] = await Promise.all([
+  // Step 3: 1-month historical summary + user status (parallel)
+  const sbClient = serverClient(await (async () => {
+    const cs = await cookies();
+    return cs.get('sb-access-token')?.value ?? null;
+  })());
+
+  const [histResult, wlRow, alertRows] = await Promise.all([
     getStockHistory(sym, '1M') as Promise<{
       success: boolean;
       data?: Array<{ date: string; close: number; high: number; low: number; volume: number }>;
@@ -254,44 +386,46 @@ async function getStockPriceEnhanced(symbol: string, userId: string | null) {
       trend?: string;
     }>,
     userId
-      ? prisma.watchlistItem.findFirst({ where: { symbol: sym, userId } })
-      : Promise.resolve(null),
+      ? sbClient.from('watchlist_items').select('*').eq('user_id', userId).eq('symbol', sym).maybeSingle()
+      : Promise.resolve({ data: null }),
     userId
-      ? prisma.priceAlert.findMany({ where: { symbol: sym, userId, active: true } })
-      : Promise.resolve([]),
+      ? sbClient.from('price_alerts').select('*').eq('user_id', userId).eq('symbol', sym).eq('active', true)
+      : Promise.resolve({ data: [] }),
   ]);
+
+  const watchlistItem = wlRow.data as Record<string, unknown> | null;
+  const activeAlerts  = (alertRows.data ?? []) as Array<Record<string, unknown>>;
 
   let historicalSummary: Record<string, unknown> | null = null;
   if (histResult.success && histResult.data && histResult.data.length > 0) {
     const closes = histResult.data.map(d => d.close);
-    const highs = histResult.data.map(d => d.high);
-    const lows = histResult.data.map(d => d.low);
-    const first = closes[0];
-    const last = closes[closes.length - 1];
+    const highs  = histResult.data.map(d => d.high);
+    const lows   = histResult.data.map(d => d.low);
+    const first  = closes[0];
+    const last   = closes[closes.length - 1];
     historicalSummary = {
       period: '1M',
       dataPoints: histResult.data.length,
       firstClose: first,
-      lastClose: last,
+      lastClose:  last,
       monthChangePercent: first ? +((last - first) / first * 100).toFixed(2) : null,
       high1M: Math.max(...highs),
-      low1M: Math.min(...lows),
+      low1M:  Math.min(...lows),
       sma20: histResult.indicators?.sma20 ? +histResult.indicators.sma20.toFixed(2) : null,
       sma50: histResult.indicators?.sma50 ? +histResult.indicators.sma50.toFixed(2) : null,
       trend: histResult.trend || 'NEUTRAL',
     };
   }
 
-  // Step 4: User status for this symbol
   const userStatus = userId
     ? {
         isInWatchlist: !!watchlistItem,
-        addedAt: watchlistItem?.createdAt ?? null,
-        targetPrice: watchlistItem?.targetPrice ?? null,
-        activeAlerts: activeAlerts.map(a => ({
-          targetPrice: a.targetPrice,
-          condition: a.condition,
-          triggered: a.triggered,
+        addedAt:       watchlistItem?.created_at ?? null,
+        targetPrice:   watchlistItem?.target_price ?? null,
+        activeAlerts:  activeAlerts.map(a => ({
+          targetPrice: a.target_price,
+          condition:   a.condition,
+          triggered:   a.triggered,
         })),
         alertCount: activeAlerts.length,
       }
@@ -307,38 +441,62 @@ async function getStockPriceEnhanced(symbol: string, userId: string | null) {
 }
 
 async function getWatchlist(userId: string | null) {
+  if (!userId) return { success: true, data: [], count: 0 };
   try {
-    const items = await prisma.watchlistItem.findMany({ 
-      where: userId ? { userId } : { userId: null },
-      orderBy: { createdAt: 'desc' } 
-    });
-    return { success: true, data: items, count: items.length };
+    const cs = await cookies();
+    const token = cs.get('sb-access-token')?.value ?? null;
+    const sb = serverClient(token);
+    const { data, error } = await sb
+      .from('watchlist_items')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return { success: true, data: data ?? [], count: data?.length ?? 0 };
   } catch (error) {
     return { success: false, error: String(error) };
   }
 }
 
 async function addToWatchlist(symbol: string, name: string, userId: string | null) {
+  if (!userId) return { success: false, error: 'Giriş yapmanız gerekli' };
   try {
-    const existing = await prisma.watchlistItem.findFirst({
-      where: { symbol: symbol.toUpperCase(), userId: userId || null },
-    });
+    const cs = await cookies();
+    const token = cs.get('sb-access-token')?.value ?? null;
+    const sb = serverClient(token);
+
+    const { data: existing } = await sb
+      .from('watchlist_items')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('symbol', symbol.toUpperCase())
+      .maybeSingle();
+
     if (existing) return { success: false, error: 'Bu hisse zaten takip listesinde' };
-    
-    const item = await prisma.watchlistItem.create({
-      data: { symbol: symbol.toUpperCase(), name, userId: userId || null },
-    });
-    return { success: true, data: item };
+
+    const { data, error } = await sb
+      .from('watchlist_items')
+      .insert({ user_id: userId, symbol: symbol.toUpperCase(), name })
+      .select()
+      .single();
+    if (error) throw error;
+    return { success: true, data };
   } catch (error) {
     return { success: false, error: String(error) };
   }
 }
 
 async function removeFromWatchlist(symbol: string, userId: string | null) {
+  if (!userId) return { success: false, error: 'Giriş yapmanız gerekli' };
   try {
-    await prisma.watchlistItem.deleteMany({ 
-      where: { symbol: symbol.toUpperCase(), userId: userId || null } 
-    });
+    const cs = await cookies();
+    const token = cs.get('sb-access-token')?.value ?? null;
+    const sb = serverClient(token);
+    const { error } = await sb
+      .from('watchlist_items')
+      .delete()
+      .eq('user_id', userId)
+      .eq('symbol', symbol.toUpperCase());
+    if (error) throw error;
     return { success: true, message: `${symbol} takip listesinden kaldırıldı` };
   } catch (error) {
     return { success: false, error: String(error) };
@@ -358,14 +516,14 @@ async function webSearch(query: string) {
 // Step 1: LLM generates better search queries
 async function generateSearchQueries(userMessage: string): Promise<string[]> {
   try {
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.GROQ_API_KEY || 'gsk_demo'}`,
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY || process.env.GROQ_API_KEY || ''}`,
       },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: 'gpt-4o-mini',
         messages: [
           {
             role: 'system',
@@ -429,10 +587,10 @@ function extractSearchContent(rawResults: unknown): Array<{ title: string; snipp
   };
 
   tryExtract(rawResults);
-  return items.filter(i => i.title || i.snippet).slice(0, 10);
+  return items.filter(i => i.title || i.snippet).slice(0, 6);
 }
 
-// Step 3: Summarize extracted content with Groq
+// Step 3: Summarize extracted content with gpt-4o-mini
 async function summarizeSearchResults(
   items: Array<{ title: string; snippet: string; url?: string }>,
   userMessage: string
@@ -440,18 +598,18 @@ async function summarizeSearchResults(
   if (items.length === 0) return 'Arama sonucu bulunamadı.';
 
   const itemsText = items
-    .map((item, i) => `[${i + 1}] Başlık: ${item.title}\nİçerik: ${item.snippet}${item.url ? `\nKaynak: ${item.url}` : ''}`)
+    .map((item, i) => `[${i + 1}] Başlık: ${item.title}\nİçerik: ${item.snippet.slice(0, 300)}${item.url ? `\nKaynak: ${item.url}` : ''}`)
     .join('\n\n');
 
   try {
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.GROQ_API_KEY || 'gsk_demo'}`,
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY || process.env.GROQ_API_KEY || ''}`,
       },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: 'gpt-4o-mini',
         messages: [
           {
             role: 'system',
@@ -650,23 +808,36 @@ async function getTopLosers(limit: number = 10) {
 }
 
 async function getPriceAlerts(userId: string | null) {
+  if (!userId) return { success: true, data: [], count: 0 };
   try {
-    const alerts = await prisma.priceAlert.findMany({
-      where: { active: true, userId: userId || null },
-      orderBy: { createdAt: 'desc' },
-    });
-    return { success: true, data: alerts, count: alerts.length };
+    const cs = await cookies();
+    const token = cs.get('sb-access-token')?.value ?? null;
+    const sb = serverClient(token);
+    const { data, error } = await sb
+      .from('price_alerts')
+      .select('*')
+      .eq('active', true)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return { success: true, data: data ?? [], count: data?.length ?? 0 };
   } catch (error) {
     return { success: false, error: String(error) };
   }
 }
 
 async function createPriceAlert(symbol: string, targetPrice: number, condition: 'above' | 'below', userId: string | null) {
+  if (!userId) return { success: false, error: 'Giriş yapmanız gerekli' };
   try {
-    const alert = await prisma.priceAlert.create({
-      data: { symbol: symbol.toUpperCase(), targetPrice, condition, userId: userId || null },
-    });
-    return { success: true, data: alert };
+    const cs = await cookies();
+    const token = cs.get('sb-access-token')?.value ?? null;
+    const sb = serverClient(token);
+    const { data, error } = await sb
+      .from('price_alerts')
+      .insert({ user_id: userId, symbol: symbol.toUpperCase(), target_price: targetPrice, condition })
+      .select()
+      .single();
+    if (error) throw error;
+    return { success: true, data };
   } catch (error) {
     return { success: false, error: String(error) };
   }
@@ -675,15 +846,15 @@ async function createPriceAlert(symbol: string, targetPrice: number, condition: 
 // TXT File Analysis
 async function readTxtFile(content: string, filename?: string) {
   try {
-    // Analyze the TXT content using Groq
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    // Analyze the TXT content using gpt-4o-mini
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.GROQ_API_KEY || 'gsk_demo'}`,
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY || process.env.GROQ_API_KEY || ''}`,
       },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: 'gpt-4o-mini',
         messages: [
           {
             role: 'system',
@@ -698,11 +869,11 @@ Türkçe yanıt ver ve profesyonel bir rapor formatı kullan.`
           },
           {
             role: 'user',
-            content: `Dosya adı: ${filename || 'bilinmiyor'}\n\nDosya içeriği:\n\`\`\`\n${content.slice(0, 10000)}\n\`\`\`\n\nBu dosyayı analiz et ve raporla.`
+            content: `Dosya adı: ${filename || 'bilinmiyor'}\n\nDosya içeriği:\n\`\`\`\n${content.slice(0, 5000)}\n\`\`\`\n\nBu dosyayı analiz et ve raporla.`
           }
         ],
         temperature: 0.3,
-        max_tokens: 2000,
+        max_tokens: 1200,
       }),
     });
 
@@ -715,7 +886,7 @@ Türkçe yanıt ver ve profesyonel bir rapor formatı kullan.`
         contentLength: content.length,
       };
     }
-    
+
     return { success: false, error: 'Analiz başarısız' };
   } catch (error) {
     return { success: false, error: String(error) };
@@ -783,6 +954,229 @@ Not: Bu analiz yatırım tavsiyesi değildir, sadece teknik analiz özetidir.`;
   }
 }
 
+// ─── New Tool Implementations ─────────────────────────────────────────────────
+
+async function analyzePortfolio(userId: string | null) {
+  try {
+    const watchlistResult = await getWatchlist(userId) as { success: boolean; data?: Array<{ symbol: string; name: string; targetPrice?: number | null }> };
+    if (!watchlistResult.success || !watchlistResult.data || watchlistResult.data.length === 0) {
+      return { success: false, error: 'Takip listesi boş veya alınamadı' };
+    }
+    const items = watchlistResult.data;
+
+    // Fetch prices in parallel
+    const priceResults = await Promise.all(
+      items.map(async (item) => {
+        const p = await getStockPrice(item.symbol) as { success: boolean; data?: Record<string, number & string> };
+        return { symbol: item.symbol, name: item.name, targetPrice: item.targetPrice ?? null, price: p };
+      })
+    );
+
+    const portfolio = priceResults
+      .filter(r => r.price.success && r.price.data)
+      .map(r => {
+        const d = r.price.data as Record<string, number & string>;
+        return {
+          symbol: r.symbol,
+          name: r.name,
+          price: d.price as number,
+          change: d.change as number,
+          changePercent: d.changePercent as number,
+          volume: d.volume as number,
+          targetPrice: r.targetPrice,
+          targetDiff: r.targetPrice ? +(((d.price as number) - r.targetPrice) / r.targetPrice * 100).toFixed(2) : null,
+        };
+      });
+
+    if (portfolio.length === 0) return { success: false, error: 'Fiyat verisi alınamadı' };
+
+    const sorted = [...portfolio].sort((a, b) => b.changePercent - a.changePercent);
+    const avgChange = portfolio.reduce((s, p) => s + p.changePercent, 0) / portfolio.length;
+
+    return {
+      success: true,
+      data: {
+        items: portfolio,
+        count: portfolio.length,
+        bestPerformer: sorted[0],
+        worstPerformer: sorted[sorted.length - 1],
+        avgChangePercent: +avgChange.toFixed(2),
+        gainers: portfolio.filter(p => p.changePercent > 0).length,
+        losers:  portfolio.filter(p => p.changePercent < 0).length,
+      },
+    };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+async function compareStocks(symbols: string[]) {
+  if (!symbols || symbols.length < 2) return { success: false, error: 'En az 2 hisse kodu gerekli' };
+  const syms = symbols.slice(0, 5).map(s => s.toUpperCase());
+
+  try {
+    const results = await Promise.all(syms.map(async (sym) => {
+      const [priceRes, histRes] = await Promise.all([
+        getStockPrice(sym) as Promise<{ success: boolean; data?: Record<string, number & string> }>,
+        getStockHistory(sym, '1M') as Promise<{ success: boolean; data?: Array<{ close: number }>; indicators?: { sma20: number | null; sma50: number | null }; trend?: string }>,
+      ]);
+
+      const price = priceRes.success && priceRes.data ? priceRes.data : null;
+      const hist = histRes.success && histRes.data && histRes.data.length > 0 ? histRes.data : null;
+      const monthChange = hist
+        ? +(((hist[hist.length - 1].close - hist[0].close) / hist[0].close) * 100).toFixed(2)
+        : null;
+
+      return {
+        symbol: sym,
+        price:         price?.price ?? null,
+        change:        price?.change ?? null,
+        changePercent: price?.changePercent ?? null,
+        volume:        price?.volume ?? null,
+        high:          price?.high ?? null,
+        low:           price?.low ?? null,
+        monthChange,
+        sma20:  histRes.indicators?.sma20 ?? null,
+        trend:  histRes.trend ?? 'NEUTRAL',
+      };
+    }));
+
+    return { success: true, data: results, count: results.length };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+function calcTechnicalIndicators(closes: number[]) {
+  if (closes.length < 20) return null;
+
+  // SMA
+  const sma20 = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+  const sma50 = closes.length >= 50 ? closes.slice(-50).reduce((a, b) => a + b, 0) / 50 : null;
+
+  // RSI(14)
+  const changes = closes.slice(-15).map((c, i, arr) => (i === 0 ? 0 : c - arr[i - 1]));
+  const gains = changes.filter(c => c > 0);
+  const losses = changes.filter(c => c < 0).map(c => Math.abs(c));
+  const avgGain = gains.reduce((a, b) => a + b, 0) / 14;
+  const avgLoss = losses.reduce((a, b) => a + b, 0) / 14;
+  const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+  const rsi = +(100 - 100 / (1 + rs)).toFixed(2);
+
+  // Bollinger Bands (SMA20 ± 2σ)
+  const mean = sma20;
+  const variance = closes.slice(-20).reduce((s, c) => s + Math.pow(c - mean, 2), 0) / 20;
+  const stddev = Math.sqrt(variance);
+  const bbUpper = +(mean + 2 * stddev).toFixed(2);
+  const bbLower = +(mean - 2 * stddev).toFixed(2);
+  const bbMiddle = +mean.toFixed(2);
+
+  const lastClose = closes[closes.length - 1];
+
+  // Signal
+  let signal = 'NÖTR';
+  if (rsi < 30 && lastClose <= bbLower) signal = 'GÜÇLÜ ALIM';
+  else if (rsi < 40) signal = 'ALIM ZONU';
+  else if (rsi > 70 && lastClose >= bbUpper) signal = 'GÜÇLÜ SATIM';
+  else if (rsi > 60) signal = 'SATIM ZONU';
+
+  return {
+    rsi,
+    sma20: +sma20.toFixed(2),
+    sma50: sma50 ? +sma50.toFixed(2) : null,
+    bbUpper,
+    bbMiddle,
+    bbLower,
+    lastClose: +lastClose.toFixed(2),
+    signal,
+    trendVsSma20: lastClose > sma20 ? 'ÜSTÜNDE' : 'ALTINDA',
+    trendVsSma50: sma50 ? (lastClose > sma50 ? 'ÜSTÜNDE' : 'ALTINDA') : null,
+  };
+}
+
+async function technicalIndicators(symbol: string, period: string = '3M') {
+  try {
+    const histResult = await getStockHistory(symbol.toUpperCase(), period) as {
+      success: boolean;
+      data?: Array<{ close: number }>;
+    };
+
+    if (!histResult.success || !histResult.data || histResult.data.length < 20) {
+      return { success: false, error: 'Yeterli veri yok (min 20 gün gerekli)' };
+    }
+
+    const closes = histResult.data.map(d => d.close);
+    const indicators = calcTechnicalIndicators(closes);
+
+    if (!indicators) return { success: false, error: 'Gösterge hesaplanamadı' };
+
+    return { success: true, symbol: symbol.toUpperCase(), period, data: indicators };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+async function getEconomicCalendar(days: number = 30) {
+  try {
+    const zai = await ZAI.create();
+    const queries = [
+      `TCMB faiz kararı tarihi ${new Date().getFullYear()}`,
+      `BIST şirket bilanço açıklama takvimi önümüzdeki ${days} gün`,
+      `Türkiye ekonomi takvim enflasyon TUIK açıklama`,
+    ];
+    const results = await Promise.all(
+      queries.map(q => zai.functions.invoke('web_search', { query: q, num: 3 }).catch(() => null))
+    );
+    return {
+      success: true,
+      data: { queries, results: results.filter(Boolean), daysAhead: days },
+    };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+async function stockScreener(params: {
+  minChange?: number;
+  maxChange?: number;
+  minVolume?: number;
+  sector?: string;
+}) {
+  try {
+    const marketData = await scanMarket() as {
+      success: boolean;
+      data?: {
+        all: Array<{ code: string; name: string; price: number; changePercent: number; volume: number }>;
+      };
+    };
+
+    if (!marketData.success || !marketData.data?.all) {
+      return { success: false, error: 'Piyasa verisi alınamadı' };
+    }
+
+    let stocks = marketData.data.all;
+
+    if (params.minChange !== undefined) stocks = stocks.filter(s => s.changePercent >= params.minChange!);
+    if (params.maxChange !== undefined) stocks = stocks.filter(s => s.changePercent <= params.maxChange!);
+    if (params.minVolume !== undefined) stocks = stocks.filter(s => s.volume >= params.minVolume!);
+
+    const top = stocks.slice(0, 20);
+    return {
+      success: true,
+      data: {
+        matches: top,
+        count: top.length,
+        totalScanned: marketData.data.all.length,
+        filters: params,
+      },
+    };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 // Tool Executor
 async function executeTool(toolName: string, params: Record<string, unknown>, userId: string | null) {
   const startTime = Date.now();
@@ -838,6 +1232,21 @@ async function executeTool(toolName: string, params: Record<string, unknown>, us
       break;
     case 'analyze_chart_image':
       result = await analyzeChartImage(params.imageBase64 as string, params.symbol as string | undefined);
+      break;
+    case 'analyze_portfolio':
+      result = await analyzePortfolio(userId);
+      break;
+    case 'compare_stocks':
+      result = await compareStocks(params.symbols as string[]);
+      break;
+    case 'technical_indicators':
+      result = await technicalIndicators(params.symbol as string, params.period as string | undefined);
+      break;
+    case 'get_economic_calendar':
+      result = await getEconomicCalendar(params.days as number | undefined);
+      break;
+    case 'stock_screener':
+      result = await stockScreener(params as { minChange?: number; maxChange?: number; minVolume?: number; sector?: string });
       break;
     default:
       result = { success: false, error: `Bilinmeyen tool: ${toolName}` };
@@ -960,6 +1369,53 @@ function selectToolsForQuery(message: string): {
       params[`web_search_${symbol}`] = { query: `${symbol} hisse analiz haber yorum` };
     }
     return { tools: [...new Set(tools)], params, queryType: 'portfolio_question', queryMeta: { symbols } };
+  }
+
+  // === PORTFOLIO ANALYSIS ===
+  if (lowerMessage.includes('portföy') && (lowerMessage.includes('analiz') || lowerMessage.includes('durum') || lowerMessage.includes('takip'))) {
+    tools.push('analyze_portfolio');
+    params['analyze_portfolio'] = {};
+    return { tools, params, queryType: 'portfolio_analysis', queryMeta: {} };
+  }
+
+  // === STOCK COMPARISON ===
+  if ((lowerMessage.includes('karşılaştır') || lowerMessage.includes('vs') || lowerMessage.includes('farkı')) && symbols.length >= 2) {
+    tools.push('compare_stocks');
+    params['compare_stocks'] = { symbols };
+    return { tools, params, queryType: 'comparison', queryMeta: { symbols } };
+  }
+
+  // === TECHNICAL INDICATORS ===
+  if ((lowerMessage.includes('rsi') || lowerMessage.includes('bollinger') || lowerMessage.includes('teknik gösterge') || lowerMessage.includes('sma') || lowerMessage.includes('macd')) && symbols.length > 0) {
+    tools.push('technical_indicators');
+    params['technical_indicators'] = { symbol: symbols[0], period: '3M' };
+    tools.push('get_stock_price');
+    params[`get_stock_price_${symbols[0]}`] = { symbol: symbols[0] };
+    return { tools, params, queryType: 'technical', queryMeta: { symbols } };
+  }
+
+  // === ECONOMIC CALENDAR ===
+  if (lowerMessage.includes('tcmb') || lowerMessage.includes('faiz kararı') || lowerMessage.includes('bilanço') || lowerMessage.includes('takvim') || lowerMessage.includes('ekonomi takvim')) {
+    tools.push('get_economic_calendar');
+    params['get_economic_calendar'] = { days: 30 };
+    tools.push('web_search');
+    params['web_search_econ'] = { query: 'TCMB BIST ekonomi takvim 2025' };
+    return { tools, params, queryType: 'economic_calendar', queryMeta: {} };
+  }
+
+  // === STOCK SCREENER ===
+  if (lowerMessage.includes('filtrele') || lowerMessage.includes('tara') || lowerMessage.includes('tarayıcı') ||
+      (lowerMessage.includes('hacmi yüksek') && (lowerMessage.includes('yükselen') || lowerMessage.includes('düşen')))) {
+    const minChangeMatch = message.match(/min.*?(%|\s)([\d.]+)/i);
+    const minVolumeMatch = message.match(/hacim.*?([\d.]+)/i);
+    tools.push('stock_screener');
+    params['stock_screener'] = {
+      minChange: lowerMessage.includes('yükselen') ? 1 : undefined,
+      maxChange: lowerMessage.includes('düşen') ? -1 : undefined,
+      minVolume: minVolumeMatch ? parseFloat(minVolumeMatch[1]) : undefined,
+    };
+    if (minChangeMatch) (params['stock_screener'] as Record<string, unknown>).minChange = parseFloat(minChangeMatch[2]);
+    return { tools, params, queryType: 'screener', queryMeta: {} };
   }
 
   // === WHERE TO INVEST TODAY ===
@@ -1126,7 +1582,7 @@ function buildToolResultsText(toolResults: Record<string, unknown>): string {
       };
       const lines: string[] = [`### get_stock_price (kaynak: ${enhanced.priceSource || 'api'})`];
       if (enhanced.data) {
-        lines.push('**Fiyat Verisi:**\n' + JSON.stringify(enhanced.data, null, 2).slice(0, 600));
+        lines.push('**Fiyat Verisi:**\n' + JSON.stringify(enhanced.data, null, 2).slice(0, 400));
       }
       if (enhanced.historical) {
         const h = enhanced.historical;
@@ -1148,7 +1604,7 @@ function buildToolResultsText(toolResults: Record<string, unknown>): string {
       }
       parts.push(lines.join('\n'));
     } else {
-      parts.push(`### ${tool}\n${JSON.stringify(r.data, null, 2).slice(0, 1500)}`);
+      parts.push(`### ${tool}\n${JSON.stringify(r.data, null, 2).slice(0, 800)}`);
     }
   }
 
@@ -1170,11 +1626,29 @@ export async function POST(request: NextRequest) {
       imageBase64,
       imageSymbol,
       confirmActions,   // PendingAction[] — user approved these actions
+      enabledTools,     // string[] — UI'dan seçilen araç kategorisi araçları
     } = body;
 
     if (!message && !txtContent && !imageBase64 && !confirmActions) {
       return NextResponse.json({ success: false, error: 'Mesaj, dosya veya resim gerekli' }, { status: 400 });
     }
+
+    // ── Rate Limiting ─────────────────────────────────────────────────────
+    const rpmThrottled = checkRpm(userId);
+    const sb = await getAgentSupabaseClient();
+    const { throttled, maxTokens: allowedTokens } = await checkAndRecordUsage(userId, sb);
+    if (throttled && !rpmThrottled) {
+      // Günlük bütçe tükendi — sessizce kısa yanıt ver
+      return NextResponse.json({
+        success: true,
+        response: '📊 Şu an yoğun kullanım var, biraz sonra tekrar dene.',
+        messages: ['📊 Şu an yoğun kullanım var, biraz sonra tekrar dene.'],
+        suggestedQuestions: [],
+        toolsUsed: [],
+        timestamp: new Date().toISOString(),
+      });
+    }
+    // ─────────────────────────────────────────────────────────────────────
 
     // ── Confirmed actions path ────────────────────────────────────────────
     if (confirmActions && Array.isArray(confirmActions) && confirmActions.length > 0) {
@@ -1239,11 +1713,16 @@ export async function POST(request: NextRequest) {
     }
 
     // Intelligent tool selection
-    const { tools, params, queryType, queryMeta } = selectToolsForQuery(message);
+    const { tools: rawTools, params, queryType, queryMeta } = selectToolsForQuery(message);
     console.log('🎯 Query type:', queryType, '| Meta:', queryMeta);
 
+    // Filter tools by user-selected categories (if any)
+    const tools = (enabledTools && Array.isArray(enabledTools) && enabledTools.length > 0)
+      ? rawTools.filter((t: string) => enabledTools.includes(t))
+      : rawTools;
+
     // Separate immediate tools from those requiring user confirmation
-    const immediateTools = tools.filter(t => !CONFIRMATION_REQUIRED_TOOLS.includes(t));
+    const immediateTools = tools.filter((t: string) => !CONFIRMATION_REQUIRED_TOOLS.includes(t));
     const pendingActions: PendingAction[] = tools
       .filter(t => CONFIRMATION_REQUIRED_TOOLS.includes(t))
       .map(t => ({
@@ -1336,24 +1815,24 @@ SORULAR: GARAN 3 ay sonraki fiyatı ne olur? | AKBNK ile karşılaştırır mıs
 
 "SORULAR:" satırı her zaman son satır olmalı, 3 kısa Türkçe soru içermeli.`;
 
-    const finalResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    const finalResponse = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.GROQ_API_KEY || 'gsk_demo'}`,
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY || process.env.GROQ_API_KEY || ''}`,
       },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: 'gpt-4o-mini',
         messages: [
           { role: 'system', content: systemPrompt },
-          ...conversationHistory.slice(-6).map((m: { role: string; content: string }) => ({
+          ...conversationHistory.slice(-4).map((m: { role: string; content: string }) => ({
             role: m.role,
             content: m.content,
           })),
           { role: 'user', content: userPromptContent },
         ],
         temperature: 0.7,
-        max_tokens: 2000,
+        max_tokens: allowedTokens,  // dynamic: soft throttle reduces this
       }),
     });
 
@@ -1362,6 +1841,9 @@ SORULAR: GARAN 3 ay sonraki fiyatı ne olur? | AKBNK ile karşılaştırır mıs
     if (finalResponse.ok) {
       const finalData = await finalResponse.json();
       rawText = finalData.choices?.[0]?.message?.content || '';
+      // Record token usage for budget tracking
+      const usage = finalData.usage?.total_tokens ?? 0;
+      if (usage > 0) recordTokenUsage(userId, usage, sb);
     } else {
       rawText = `İşlem tamamlandı. Araçlar: ${immediateTools.join(', ')}`;
     }

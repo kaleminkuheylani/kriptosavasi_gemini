@@ -1,168 +1,152 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
 import { cookies } from 'next/headers';
+import { serverClient } from '@/lib/supabase';
 
-// Helper - Get current user
-async function getCurrentUser() {
-  const cookieStore = await cookies();
-  const userId = cookieStore.get('userId')?.value;
-  return userId;
+async function getSupabaseClient() {
+  const cs = await cookies();
+  const token = cs.get('sb-access-token')?.value ?? null;
+  return serverClient(token);
 }
 
-// GET - Watchlist'i getir
+// GET – Fetch watchlist
 export async function GET() {
   try {
-    const userId = await getCurrentUser();
-    
-    const watchlist = await db.watchlistItem.findMany({
-      where: userId ? { userId } : { userId: null },
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
+    const sb = await getSupabaseClient();
+    const { data: { user } } = await sb.auth.getUser();
+    if (!user) return NextResponse.json({ success: true, data: [] });
 
-    return NextResponse.json({
-      success: true,
-      data: watchlist,
-    });
+    const { data, error } = await sb
+      .from('watchlist_items')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    return NextResponse.json({ success: true, data: data ?? [] });
   } catch (error) {
     console.error('Watchlist fetch error:', error);
-    
-    return NextResponse.json({
-      success: false,
-      error: 'Takip listesi alınamadı',
-      data: [],
-    }, { status: 500 });
+    return NextResponse.json({ success: false, error: 'Takip listesi alınamadı', data: [] }, { status: 500 });
   }
 }
 
-// POST - Watchlist'e ekle
+// POST – Add to watchlist
 export async function POST(request: NextRequest) {
   try {
-    const userId = await getCurrentUser();
+    const sb = await getSupabaseClient();
+    const { data: { user } } = await sb.auth.getUser();
+    if (!user) return NextResponse.json({ success: false, error: 'Giriş yapmanız gerekli' }, { status: 401 });
+
     const body = await request.json();
     const { symbol, name, targetPrice } = body;
 
     if (!symbol || !name) {
-      return NextResponse.json({
-        success: false,
-        error: 'Hisse kodu ve adı gerekli',
-      }, { status: 400 });
+      return NextResponse.json({ success: false, error: 'Hisse kodu ve adı gerekli' }, { status: 400 });
     }
 
-    // Zaten var mı kontrol et (kullanıcının kendi listesinde)
-    const existing = await db.watchlistItem.findFirst({
-      where: { 
-        symbol: symbol.toUpperCase(),
-        userId: userId || null,
-      },
-    });
+    // Check duplicate
+    const { data: existing } = await sb
+      .from('watchlist_items')
+      .select('id')
+      .eq('user_id', user.id)
+      .eq('symbol', symbol.toUpperCase())
+      .maybeSingle();
 
     if (existing) {
-      return NextResponse.json({
-        success: false,
-        error: 'Bu hisse zaten takip listesinde',
-        data: existing,
-      }, { status: 400 });
+      return NextResponse.json({ success: false, error: 'Bu hisse zaten takip listesinde' }, { status: 400 });
     }
 
-    const item = await db.watchlistItem.create({
-      data: {
-        symbol: symbol.toUpperCase(),
+    const { data, error } = await sb
+      .from('watchlist_items')
+      .insert({
+        user_id:      user.id,
+        symbol:       symbol.toUpperCase(),
         name,
-        targetPrice: targetPrice ? parseFloat(targetPrice) : null,
-        userId: userId || null,
-      },
-    });
+        target_price: targetPrice ? parseFloat(targetPrice) : null,
+      })
+      .select()
+      .single();
 
+    if (error) throw error;
+
+    // Map snake_case → camelCase for frontend compatibility
     return NextResponse.json({
       success: true,
-      data: item,
+      data: mapWatchlistItem(data),
       message: 'Takip listesine eklendi',
     });
   } catch (error) {
     console.error('Watchlist add error:', error);
-    
-    return NextResponse.json({
-      success: false,
-      error: 'Takip listesine eklenemedi',
-    }, { status: 500 });
+    return NextResponse.json({ success: false, error: 'Takip listesine eklenemedi' }, { status: 500 });
   }
 }
 
-// DELETE - Watchlist'ten kaldır
+// DELETE – Remove from watchlist
 export async function DELETE(request: NextRequest) {
   try {
-    const userId = await getCurrentUser();
+    const sb = await getSupabaseClient();
+    const { data: { user } } = await sb.auth.getUser();
+    if (!user) return NextResponse.json({ success: false, error: 'Giriş yapmanız gerekli' }, { status: 401 });
+
     const { searchParams } = new URL(request.url);
-    const id = searchParams.get('id');
+    const id     = searchParams.get('id');
     const symbol = searchParams.get('symbol');
 
     if (!id && !symbol) {
-      return NextResponse.json({
-        success: false,
-        error: 'ID veya sembol gerekli',
-      }, { status: 400 });
+      return NextResponse.json({ success: false, error: 'ID veya sembol gerekli' }, { status: 400 });
     }
 
-    if (id) {
-      await db.watchlistItem.delete({
-        where: { id },
-      });
-    } else if (symbol) {
-      await db.watchlistItem.deleteMany({
-        where: { 
-          symbol: symbol.toUpperCase(),
-          userId: userId || null,
-        },
-      });
-    }
+    let query = sb.from('watchlist_items').delete().eq('user_id', user.id);
+    if (id)     query = query.eq('id', id);
+    else        query = query.eq('symbol', symbol!.toUpperCase());
 
-    return NextResponse.json({
-      success: true,
-      message: 'Takip listesinden kaldırıldı',
-    });
+    const { error } = await query;
+    if (error) throw error;
+
+    return NextResponse.json({ success: true, message: 'Takip listesinden kaldırıldı' });
   } catch (error) {
     console.error('Watchlist remove error:', error);
-    
-    return NextResponse.json({
-      success: false,
-      error: 'Takip listesinden kaldırılamadı',
-    }, { status: 500 });
+    return NextResponse.json({ success: false, error: 'Takip listesinden kaldırılamadı' }, { status: 500 });
   }
 }
 
-// PUT - Watchlist güncelle (hedef fiyat)
+// PUT – Update target price
 export async function PUT(request: NextRequest) {
   try {
+    const sb = await getSupabaseClient();
+    const { data: { user } } = await sb.auth.getUser();
+    if (!user) return NextResponse.json({ success: false, error: 'Giriş yapmanız gerekli' }, { status: 401 });
+
     const body = await request.json();
     const { id, targetPrice } = body;
 
-    if (!id) {
-      return NextResponse.json({
-        success: false,
-        error: 'ID gerekli',
-      }, { status: 400 });
-    }
+    if (!id) return NextResponse.json({ success: false, error: 'ID gerekli' }, { status: 400 });
 
-    const item = await db.watchlistItem.update({
-      where: { id },
-      data: {
-        targetPrice: targetPrice ? parseFloat(targetPrice) : null,
-      },
-    });
+    const { data, error } = await sb
+      .from('watchlist_items')
+      .update({ target_price: targetPrice ? parseFloat(targetPrice) : null })
+      .eq('id', id)
+      .eq('user_id', user.id)
+      .select()
+      .single();
 
-    return NextResponse.json({
-      success: true,
-      data: item,
-      message: 'Güncellendi',
-    });
+    if (error) throw error;
+
+    return NextResponse.json({ success: true, data: mapWatchlistItem(data), message: 'Güncellendi' });
   } catch (error) {
     console.error('Watchlist update error:', error);
-    
-    return NextResponse.json({
-      success: false,
-      error: 'Güncellenemedi',
-    }, { status: 500 });
+    return NextResponse.json({ success: false, error: 'Güncellenemedi' }, { status: 500 });
   }
+}
+
+// snake_case DB row → camelCase frontend shape
+function mapWatchlistItem(row: Record<string, unknown>) {
+  return {
+    id:          row.id,
+    symbol:      row.symbol,
+    name:        row.name,
+    targetPrice: row.target_price,
+    userId:      row.user_id,
+    createdAt:   row.created_at,
+    updatedAt:   row.updated_at,
+  };
 }
