@@ -98,6 +98,60 @@ const FALLBACK_STOCKS: StockData[] = [
   { code: 'YUNSA', name: 'YUNSA', price: 145.00, change: 2.50, changePercent: 1.76, volume: 250000, high: 148.00, low: 143.50, open: 144.50, previousClose: 142.50 },
   // Z
   { code: 'ZOREN', name: 'ZORLU ENERJI', price: 28.75, change: 0.50, changePercent: 1.77, volume: 2500000, high: 29.30, low: 28.40, open: 28.60, previousClose: 28.25 },
+
+  // Ek BIST 100 hisseleri
+  // A (devam)
+  { code: 'ALBRK', name: 'ALBARAKA TURK', price: 18.50, change: 0.35, changePercent: 1.93, volume: 8500000, high: 18.90, low: 18.20, open: 18.30, previousClose: 18.15 },
+  { code: 'ANACM', name: 'ANADOLU CAM', price: 24.80, change: 0.45, changePercent: 1.85, volume: 3200000, high: 25.20, low: 24.50, open: 24.60, previousClose: 24.35 },
+  { code: 'ANHYT', name: 'ANADOLU HAYAT EMEKLILIK', price: 68.50, change: 1.20, changePercent: 1.78, volume: 1800000, high: 69.50, low: 67.80, open: 68.00, previousClose: 67.30 },
+  { code: 'ANSGR', name: 'ANADOLU SIGORTA', price: 125.00, change: 2.25, changePercent: 1.83, volume: 420000, high: 127.50, low: 123.50, open: 124.50, previousClose: 122.75 },
+  { code: 'ASUZU', name: 'ANADOLU ISUZU', price: 385.00, change: 6.50, changePercent: 1.72, volume: 280000, high: 392.00, low: 382.00, open: 383.00, previousClose: 378.50 },
+  { code: 'AYDEM', name: 'AYDEM ENERJI', price: 38.20, change: 0.65, changePercent: 1.73, volume: 4200000, high: 38.90, low: 37.80, open: 38.00, previousClose: 37.55 },
+  // B (devam)
+  { code: 'BAGFS', name: 'BAGFAS GUBRE', price: 285.00, change: 4.50, changePercent: 1.60, volume: 120000, high: 290.00, low: 282.00, open: 283.50, previousClose: 280.50 },
+  { code: 'BJKAS', name: 'BESIKTAS JK', price: 68.50, change: 1.50, changePercent: 2.24, volume: 5500000, high: 70.50, low: 67.50, open: 68.00, previousClose: 67.00 },
+  { code: 'BTCIM', name: 'BATI CIMENTO', price: 92.50, change: 1.50, changePercent: 1.65, volume: 650000, high: 94.00, low: 91.50, open: 92.00, previousClose: 91.00 },
+  // C (devam)
+  { code: 'CLEBI', name: 'CELEBI HAVA SERVISI', price: 245.00, change: 4.00, changePercent: 1.66, volume: 350000, high: 249.00, low: 242.00, open: 243.00, previousClose: 241.00 },
+  // D (devam)
+  { code: 'DOAS', name: 'DOGUS OTOMOTIV', price: 248.50, change: -3.50, changePercent: -1.39, volume: 1200000, high: 253.00, low: 247.00, open: 252.00, previousClose: 252.00 },
+  // E (devam)
+  { code: 'ECILC', name: 'ECZACIBASI ILAC', price: 32.50, change: 0.55, changePercent: 1.72, volume: 4500000, high: 33.20, low: 32.10, open: 32.20, previousClose: 31.95 },
+  { code: 'EGEEN', name: 'EGE ENDUSTRI', price: 1285.00, change: 22.00, changePercent: 1.74, volume: 85000, high: 1310.00, low: 1275.00, open: 1280.00, previousClose: 1263.00 },
+  { code: 'EKGYO', name: 'EMLAK KONUT GYO', price: 22.80, change: 0.40, changePercent: 1.79, volume: 42000000, high: 23.20, low: 22.50, open: 22.60, previousClose: 22.40 },
+  { code: 'EUPWR', name: 'EUROPOWER ENERJI', price: 28.50, change: 0.50, changePercent: 1.79, volume: 2800000, high: 29.00, low: 28.20, open: 28.30, previousClose: 28.00 },
+  // G (devam)
+  { code: 'GLYHO', name: 'GLOBAL YATIRIM HOLDING', price: 52.50, change: 0.90, changePercent: 1.74, volume: 3500000, high: 53.50, low: 52.00, open: 52.20, previousClose: 51.60 },
+  { code: 'GSRAY', name: 'GALATASARAY', price: 185.50, change: 4.50, changePercent: 2.49, volume: 12000000, high: 190.00, low: 183.00, open: 184.00, previousClose: 181.00 },
+  // I (devam)
+  { code: 'INDES', name: 'INDEKS BILGISAYAR', price: 128.50, change: 2.20, changePercent: 1.74, volume: 580000, high: 130.50, low: 127.00, open: 127.50, previousClose: 126.30 },
+  { code: 'ISGYO', name: 'IS GYO', price: 18.50, change: 0.32, changePercent: 1.76, volume: 12000000, high: 18.90, low: 18.30, open: 18.35, previousClose: 18.18 },
+  // J
+  { code: 'JANTS', name: 'JANTSA JANT', price: 285.00, change: 5.00, changePercent: 1.79, volume: 180000, high: 291.00, low: 282.00, open: 283.00, previousClose: 280.00 },
+  // K (devam)
+  { code: 'KLNMA', name: 'KALKINMA YATIRIM BANKASI', price: 28.50, change: 0.50, changePercent: 1.79, volume: 2500000, high: 29.00, low: 28.20, open: 28.30, previousClose: 28.00 },
+  { code: 'KORDS', name: 'KORDSA', price: 92.50, change: 1.60, changePercent: 1.76, volume: 1200000, high: 94.00, low: 91.50, open: 92.00, previousClose: 90.90 },
+  { code: 'KOTON', name: 'KOTON MAGAZACILIK', price: 125.00, change: 2.25, changePercent: 1.83, volume: 450000, high: 127.50, low: 123.50, open: 124.00, previousClose: 122.75 },
+  // M (devam)
+  { code: 'MAVI', name: 'MAVI GIYIM', price: 285.00, change: 5.00, changePercent: 1.79, volume: 850000, high: 290.00, low: 282.00, open: 283.00, previousClose: 280.00 },
+  { code: 'MERCN', name: 'MERCAN KIMYA', price: 68.50, change: 1.20, changePercent: 1.78, volume: 850000, high: 69.80, low: 67.80, open: 68.00, previousClose: 67.30 },
+  // N (devam)
+  { code: 'NETAS', name: 'NETAS TELEKOMUNIKASYON', price: 185.00, change: 3.20, changePercent: 1.76, volume: 420000, high: 188.50, low: 183.00, open: 184.00, previousClose: 181.80 },
+  { code: 'NUHCM', name: 'NUH CIMENTO', price: 125.00, change: 2.10, changePercent: 1.71, volume: 1800000, high: 127.50, low: 123.50, open: 124.00, previousClose: 122.90 },
+  // O (devam)
+  { code: 'ORGE', name: 'ORGE ENERJI', price: 48.50, change: 0.85, changePercent: 1.78, volume: 1200000, high: 49.30, low: 48.00, open: 48.20, previousClose: 47.65 },
+  // S (devam)
+  { code: 'SOKM', name: 'SOK MARKETLER', price: 62.50, change: 1.10, changePercent: 1.79, volume: 8500000, high: 63.50, low: 61.80, open: 62.00, previousClose: 61.40 },
+  { code: 'SAMAT', name: 'SARAY MATBAACILIK', price: 28.50, change: 0.50, changePercent: 1.79, volume: 2500000, high: 29.00, low: 28.20, open: 28.30, previousClose: 28.00 },
+  // T (devam)
+  { code: 'TATGD', name: 'TAT GIDA', price: 38.50, change: 0.65, changePercent: 1.72, volume: 3500000, high: 39.20, low: 38.10, open: 38.20, previousClose: 37.85 },
+  { code: 'TBORG', name: 'TURK TUBORG', price: 285.00, change: 4.50, changePercent: 1.60, volume: 180000, high: 290.00, low: 282.00, open: 283.00, previousClose: 280.50 },
+  { code: 'TKFEN', name: 'TEKFEN HOLDING', price: 92.50, change: 1.60, changePercent: 1.76, volume: 2500000, high: 94.00, low: 91.50, open: 92.00, previousClose: 90.90 },
+  { code: 'TKNSA', name: 'TEKNOSA', price: 45.50, change: 0.80, changePercent: 1.79, volume: 1800000, high: 46.30, low: 45.00, open: 45.20, previousClose: 44.70 },
+  { code: 'TTKOM', name: 'TURK TELEKOM', price: 42.50, change: 0.72, changePercent: 1.72, volume: 28000000, high: 43.20, low: 42.00, open: 42.10, previousClose: 41.78 },
+  { code: 'TRGYO', name: 'TORUNLAR GYO', price: 35.20, change: 0.60, changePercent: 1.73, volume: 5500000, high: 35.80, low: 34.90, open: 35.00, previousClose: 34.60 },
+  // W
+  { code: 'WENTO', name: 'WENTO ENERJI', price: 18.50, change: 0.32, changePercent: 1.76, volume: 4500000, high: 18.90, low: 18.20, open: 18.30, previousClose: 18.18 },
 ];
 
 export async function GET() {
