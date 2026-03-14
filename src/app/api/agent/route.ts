@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { PrismaClient } from '@prisma/client';
-import ZAI from 'z-ai-web-dev-sdk';
 import { cookies } from 'next/headers';
 
 const prisma = new PrismaClient();
@@ -140,110 +139,62 @@ async function getStockPrice(symbol: string) {
 }
 
 async function getStockHistory(symbol: string, period: string = '1M') {
-  try {
-    const rangeMap: Record<string, number> = {
-      '1M': 30, '3M': 90, '6M': 180, '1Y': 365, '3Y': 1095, '5Y': 1825,
-    };
-    const days = rangeMap[period] || 30;
-    
-    const response = await fetch(
-      `https://internal-api.z.ai/external/finance/v1/markets/stock/history?symbol=${symbol.toUpperCase()}.IS&interval=1d`,
-      { headers: { 'X-Z-AI-From': 'Z' } }
-    );
-    
-    const data = await response.json();
-    const now = Date.now() / 1000;
-    const cutoff = now - (days * 24 * 60 * 60);
-    
-    if (data.body) {
-      const historical = Object.values(data.body as Record<string, {
-        date: string;
-        date_utc: number;
-        open: number;
-        high: number;
-        low: number;
-        close: number;
-        volume: number;
-      }>)
-        .filter((e) => e.date_utc >= cutoff)
-        .map((e) => ({
-          date: e.date,
-          open: e.open,
-          high: e.high,
-          low: e.low,
-          close: e.close,
-          volume: e.volume,
-        }));
-      
-      // Calculate technical indicators
-      const closes = historical.map(h => h.close);
-      const sma20 = closes.length >= 20 ? closes.slice(-20).reduce((a, b) => a + b, 0) / 20 : null;
-      const sma50 = closes.length >= 50 ? closes.slice(-50).reduce((a, b) => a + b, 0) / 50 : null;
-      
-      return { 
-        success: true, 
-        data: historical, 
-        count: historical.length,
-        indicators: { sma20, sma50 },
-        trend: sma20 && sma50 ? (sma20 > sma50 ? 'BULLISH' : 'BEARISH') : 'NEUTRAL',
-      };
-    }
-    return { success: false, error: 'Veri bulunamadı' };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
+  const rangeMap: Record<string, number> = {
+    '1M': 30, '3M': 90, '6M': 180, '1Y': 365, '3Y': 1095, '5Y': 1825,
+  };
+  const outputsize = rangeMap[period] || 30;
 
-// Web search fallback for stock price when API is unavailable
-async function webSearchForPrice(symbol: string) {
+  const apiKey = process.env.TWELVE_DATA_API_KEY;
+  if (!apiKey) return { success: false, error: 'TWELVE_DATA_API_KEY tanımlı değil' };
+
   try {
-    const zai = await ZAI.create();
-    const query = `${symbol} hisse fiyat bugün BIST borsa TL`;
-    const results = await zai.functions.invoke('web_search', { query, num: 3 });
-    const items = extractSearchContent(results);
+    const url = `https://api.twelvedata.com/time_series?symbol=${symbol.toUpperCase()}&exchange=BIST&interval=1day&outputsize=${outputsize}&apikey=${apiKey}`;
+    const response = await fetch(url, { cache: 'no-store' });
+    const data = await response.json();
+
+    if (data.status === 'error' || !data.values) {
+      return { success: false, error: data.message || 'Veri bulunamadı' };
+    }
+
+    const historical = (data.values as Array<{
+      datetime: string; open: string; high: string; low: string; close: string; volume: string;
+    }>).map(e => ({
+      date: e.datetime,
+      open: parseFloat(e.open),
+      high: parseFloat(e.high),
+      low: parseFloat(e.low),
+      close: parseFloat(e.close),
+      volume: parseInt(e.volume),
+    })).reverse(); // Twelve Data returns newest first
+
+    const closes = historical.map(h => h.close);
+    const sma20 = closes.length >= 20 ? closes.slice(-20).reduce((a, b) => a + b, 0) / 20 : null;
+    const sma50 = closes.length >= 50 ? closes.slice(-50).reduce((a, b) => a + b, 0) / 50 : null;
+
     return {
       success: true,
-      note: 'Asenax API erişilemedi — web aramasından elde edildi',
-      searchResults: items.slice(0, 3),
+      data: historical,
+      count: historical.length,
+      indicators: { sma20, sma50 },
+      trend: sma20 && sma50 ? (sma20 > sma50 ? 'BULLISH' : 'BEARISH') : 'NEUTRAL',
     };
   } catch (error) {
     return { success: false, error: String(error) };
   }
 }
 
-// Enhanced stock price: API + web fallback + 1M history summary + user status
+// Enhanced stock price: API + 1M history summary + user status
 async function getStockPriceEnhanced(symbol: string, userId: string | null) {
   const sym = symbol.toUpperCase();
 
-  // Step 1: API price (with cache)
   const apiResult = await getStockPrice(sym) as {
     success: boolean;
     data?: Record<string, unknown>;
     error?: string;
   };
 
-  let priceData: Record<string, unknown> | null = null;
-  let priceSource = 'api';
-
-  if (apiResult.success && apiResult.data) {
-    priceData = apiResult.data;
-  } else {
-    // Step 2: Fallback to web search
-    priceSource = 'web_search_fallback';
-    const webResult = await webSearchForPrice(sym) as {
-      success: boolean;
-      note?: string;
-      searchResults?: unknown[];
-      error?: string;
-    };
-    if (webResult.success) {
-      priceData = {
-        symbol: sym,
-        note: webResult.note,
-        searchResults: webResult.searchResults,
-      };
-    }
-  }
+  const priceData: Record<string, unknown> | null = (apiResult.success && apiResult.data) ? apiResult.data : null;
+  const priceSource = 'api';
 
   // Step 3: 1-month historical summary (parallel with step 4)
   const [histResult, watchlistItem, activeAlerts] = await Promise.all([
@@ -345,218 +296,26 @@ async function removeFromWatchlist(symbol: string, userId: string | null) {
   }
 }
 
-async function webSearch(query: string) {
-  try {
-    const zai = await ZAI.create();
-    const results = await zai.functions.invoke('web_search', { query, num: 5 });
-    return { success: true, data: results };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
-
-const SEARCH_QUERY_SYSTEM = `Sen bir arama uzmanısın. Kullanıcının sorusunu daha iyi web aramaları için optimize et.
-BIST, hisse, finans ve Türk piyasası konularında uzmanlaşmışsın.
-JSON formatında sadece 2-3 arama sorgusu döndür. Başka açıklama yapma.
-Örnek: {"queries": ["THYAO hisse analiz 2024", "Türk Hava Yolları KAP bildirimi", "THYAO teknik analiz"]}`;
-
-// Step 1: LLM generates better search queries
-async function generateSearchQueries(userMessage: string): Promise<string[]> {
-  const parseQueries = (content: string): string[] | null => {
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return null;
-    try {
-      const parsed = JSON.parse(jsonMatch[0]);
-      if (Array.isArray(parsed.queries) && parsed.queries.length > 0) {
-        return parsed.queries.slice(0, 3);
-      }
-    } catch (_e) { /* ignore */ }
-    return null;
-  };
-
-  if (process.env.GROQ_API_KEY) {
-    try {
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model: 'llama-3.3-70b-versatile',
-          messages: [
-            { role: 'system', content: SEARCH_QUERY_SYSTEM },
-            { role: 'user', content: `Şu soru için en iyi 2-3 arama sorgusunu üret: "${userMessage}"` },
-          ],
-          temperature: 0.3,
-          max_tokens: 200,
-        }),
-      });
-      if (response.ok) {
-        const data = await response.json();
-        const queries = parseQueries(data.choices?.[0]?.message?.content || '');
-        if (queries) return queries;
-      }
-    } catch (_e) { /* fall through to ZAI */ }
-  }
-
-  // ZAI (Gemini) fallback
-  try {
-    const zai = await ZAI.create();
-    const zaiResp = await zai.chat.completions.create({
-      messages: [
-        { role: 'system', content: SEARCH_QUERY_SYSTEM },
-        { role: 'user', content: `Şu soru için en iyi 2-3 arama sorgusunu üret: "${userMessage}"` },
-      ],
-      temperature: 0.3,
-      max_tokens: 200,
-    });
-    const queries = parseQueries(zaiResp.choices?.[0]?.message?.content || '');
-    if (queries) return queries;
-  } catch (_e) { /* fall through */ }
-
-  return [userMessage];
-}
-
-// Step 2: Extract title + paragraphs from raw search results
-function extractSearchContent(rawResults: unknown): Array<{ title: string; snippet: string; url?: string }> {
-  if (!rawResults) return [];
-  const items: Array<{ title: string; snippet: string; url?: string }> = [];
-
-  const tryExtract = (obj: unknown) => {
-    if (!obj || typeof obj !== 'object') return;
-    const o = obj as Record<string, unknown>;
-
-    if (typeof o.title === 'string' || typeof o.snippet === 'string' || typeof o.description === 'string') {
-      items.push({
-        title: (o.title || o.name || '') as string,
-        snippet: (o.snippet || o.description || o.content || o.body || '') as string,
-        url: (o.url || o.link || o.href || '') as string,
-      });
-      return;
-    }
-
-    for (const val of Object.values(o)) {
-      if (Array.isArray(val)) {
-        for (const item of val) tryExtract(item);
-      } else if (val && typeof val === 'object') {
-        tryExtract(val);
-      }
-    }
-  };
-
-  tryExtract(rawResults);
-  return items.filter(i => i.title || i.snippet).slice(0, 10);
-}
-
-const SUMMARIZE_SYSTEM = `Sen bir haber ve finans analiz asistanısın. Verilen arama sonuçlarını kullanıcının sorusuyla ilişkilendirerek özetle.
-Sadece başlık ve paragraf bilgilerini kullan. Kaynaklara atıfta bulun. Türkçe yanıt ver.`;
-
-// Step 3: Summarize extracted content with Groq or ZAI fallback
-async function summarizeSearchResults(
-  items: Array<{ title: string; snippet: string; url?: string }>,
-  userMessage: string
-): Promise<string> {
-  if (items.length === 0) return 'Arama sonucu bulunamadı.';
-
-  const itemsText = items
-    .map((item, i) => `[${i + 1}] Başlık: ${item.title}\nİçerik: ${item.snippet}${item.url ? `\nKaynak: ${item.url}` : ''}`)
-    .join('\n\n');
-
-  const messages = [
-    { role: 'system' as const, content: SUMMARIZE_SYSTEM },
-    { role: 'user' as const, content: `Kullanıcı sorusu: "${userMessage}"\n\nArama sonuçları:\n${itemsText}\n\nBu sonuçları kullanıcı sorusuyla ilgili şekilde özetle.` },
-  ];
-
-  if (process.env.GROQ_API_KEY) {
-    try {
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-        },
-        body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages, temperature: 0.5, max_tokens: 1000 }),
-      });
-      if (response.ok) {
-        const data = await response.json();
-        const text = data.choices?.[0]?.message?.content;
-        if (text) return text;
-      }
-    } catch (_e) { /* fall through to ZAI */ }
-  }
-
-  // ZAI (Gemini) fallback
-  try {
-    const zai = await ZAI.create();
-    const zaiResp = await zai.chat.completions.create({ messages, temperature: 0.5, max_tokens: 1000 });
-    const text = zaiResp.choices?.[0]?.message?.content;
-    if (text) return text;
-  } catch (_e) { /* fall through */ }
-
-  return items.map(i => `• **${i.title}**: ${i.snippet}`).join('\n');
-}
-
-// Enhanced web search: query generation → parallel search → extract → summarize
 async function enhancedWebSearch(userMessage: string) {
-  try {
-    console.log('🔍 [enhancedWebSearch] Sorgular üretiliyor...');
-    const queries = await generateSearchQueries(userMessage);
-    console.log('🔍 [enhancedWebSearch] Üretilen sorgular:', queries);
-
-    const zai = await ZAI.create();
-
-    // Parallel search for all queries
-    const searchPromises = queries.map(q =>
-      zai.functions.invoke('web_search', { query: q, num: 5 }).catch(() => null)
-    );
-    const rawResults = await Promise.all(searchPromises);
-
-    // Extract title + paragraphs from all results
-    const allItems: Array<{ title: string; snippet: string; url?: string }> = [];
-    for (const raw of rawResults) {
-      if (raw) allItems.push(...extractSearchContent(raw));
-    }
-
-    // Deduplicate by title
-    const seen = new Set<string>();
-    const uniqueItems = allItems.filter(item => {
-      const key = item.title.slice(0, 60);
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-
-    console.log(`🔍 [enhancedWebSearch] ${uniqueItems.length} sonuç bulundu, özetleniyor...`);
-
-    // Summarize
-    const summary = await summarizeSearchResults(uniqueItems, userMessage);
-
-    return {
-      success: true,
-      data: {
-        queries,
-        items: uniqueItems,
-        summary,
-      },
-    };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
+  return {
+    success: true,
+    data: { queries: [userMessage], items: [], summary: 'Web arama servisi bu sürümde kullanılamıyor.' },
+  };
 }
 
 async function readDocument(url: string) {
   try {
-    const zai = await ZAI.create();
-    const result = await zai.functions.invoke('page_reader', { url });
-    return { 
-      success: true, 
-      data: {
-        title: result.data?.title,
-        content: result.data?.html?.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').slice(0, 3000),
-        url,
-      },
-    };
+    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    const html = await res.text();
+    const text = html
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[\s\S]*?<\/style>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 3000);
+    const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
+    return { success: true, data: { title: titleMatch?.[1] || '', content: text, url } };
   } catch (error) {
     return { success: false, error: String(error) };
   }
@@ -564,13 +323,12 @@ async function readDocument(url: string) {
 
 async function getKapData(symbol?: string) {
   try {
-    const zai = await ZAI.create();
-    const query = symbol 
-      ? `${symbol} hisse KAP bildirim Kamu Aydınlatma Platformu son`
-      : 'BIST KAP bildirimler Kamu Aydınlatma Platformu bugün önemli';
-    
-    const results = await zai.functions.invoke('web_search', { query, num: 10 });
-    return { success: true, data: results, source: 'KAP Search' };
+    const url = symbol
+      ? `https://www.kap.org.tr/tr/api/memberDisclosureQuery?memberCode=${symbol.toUpperCase()}&page=0&pageSize=10`
+      : `https://www.kap.org.tr/tr/api/disclosures?disclosureType=FR&page=0&pageSize=10`;
+    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    const data = await res.json();
+    return { success: true, data, source: 'kap.org.tr' };
   } catch (error) {
     return { success: false, error: String(error) };
   }
@@ -690,12 +448,31 @@ async function createPriceAlert(symbol: string, targetPrice: number, condition: 
   }
 }
 
+async function callOpenAI(messages: Array<{ role: string; content: unknown }>, options: { max_tokens?: number; temperature?: number } = {}) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error('OPENAI_API_KEY tanımlı değil');
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: 'gpt-4.1-mini',
+      messages,
+      temperature: options.temperature ?? 0.5,
+      max_tokens: options.max_tokens ?? 2000,
+    }),
+  });
+  if (!res.ok) throw new Error(`OpenAI API hatası: ${res.status}`);
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content as string;
+}
+
 // TXT File Analysis
 async function readTxtFile(content: string, filename?: string) {
-  const txtMessages = [
-    {
-      role: 'system' as const,
-      content: `Sen profesyonel bir finansal analiz asistanısın. Kullanıcının yüklediği TXT dosyasını analiz et ve:
+  try {
+    const analysis = await callOpenAI([
+      {
+        role: 'system',
+        content: `Sen profesyonel bir finansal analiz asistanısın. Kullanıcının yüklediği TXT dosyasını analiz et ve:
 1. Dosyanın içeriğini özetle
 2. Finansal veriler varsa analiz et
 3. Önemli noktaları vurgula
@@ -703,50 +480,24 @@ async function readTxtFile(content: string, filename?: string) {
 5. Yatırımcı için önemli bilgileri çıkar
 
 Türkçe yanıt ver ve profesyonel bir rapor formatı kullan.`,
-    },
-    {
-      role: 'user' as const,
-      content: `Dosya adı: ${filename || 'bilinmiyor'}\n\nDosya içeriği:\n\`\`\`\n${content.slice(0, 10000)}\n\`\`\`\n\nBu dosyayı analiz et ve raporla.`,
-    },
-  ];
-
-  if (process.env.GROQ_API_KEY) {
-    try {
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-        },
-        body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: txtMessages, temperature: 0.3, max_tokens: 2000 }),
-      });
-      if (response.ok) {
-        const data = await response.json();
-        const analysis = data.choices?.[0]?.message?.content;
-        if (analysis) return { success: true, analysis, filename, contentLength: content.length };
-      }
-    } catch (_e) { /* fall through to ZAI */ }
-  }
-
-  // ZAI (Gemini) fallback
-  try {
-    const zai = await ZAI.create();
-    const zaiResp = await zai.chat.completions.create({ messages: txtMessages, temperature: 0.3, max_tokens: 2000 });
-    const analysis = zaiResp.choices?.[0]?.message?.content;
-    if (analysis) return { success: true, analysis, filename, contentLength: content.length };
+      },
+      {
+        role: 'user',
+        content: `Dosya adı: ${filename || 'bilinmiyor'}\n\nDosya içeriği:\n\`\`\`\n${content.slice(0, 10000)}\n\`\`\`\n\nBu dosyayı analiz et ve raporla.`,
+      },
+    ], { temperature: 0.3, max_tokens: 2000 });
+    return { success: true, analysis, filename, contentLength: content.length };
   } catch (error) {
     return { success: false, error: String(error) };
   }
-
-  return { success: false, error: 'Analiz başarısız' };
 }
 
-// Chart Image Analysis with VLM
+// Chart Image Analysis with OpenAI Vision
 async function analyzeChartImage(imageBase64: string, symbol?: string) {
-  try {
-    const zai = await ZAI.create();
-    
-    const prompt = `Sen profesyonel bir teknik analiz uzmanısın. Bu finansal grafiği detaylı şekilde analiz et ve:
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return { success: false, error: 'OPENAI_API_KEY tanımlı değil' };
+
+  const prompt = `Sen profesyonel bir teknik analiz uzmanısın. Bu finansal grafiği detaylı şekilde analiz et ve:
 
 📊 **GENEL GÖRÜNÜM**
 - Grafik türünü belirle (çubuk, çizgi, mum vs.)
@@ -773,31 +524,25 @@ async function analyzeChartImage(imageBase64: string, symbol?: string) {
 - Kısa vadeli görünüm
 - Orta vadeli görünüm
 - Dikkat edilmesi gerekenler
-
-${symbol ? `Hisse: ${symbol}` : ''}
+${symbol ? `\nHisse: ${symbol}` : ''}
 
 Not: Bu analiz yatırım tavsiyesi değildir, sadece teknik analiz özetidir.`;
 
-    const response = await zai.chat.completions.createVision({
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: prompt },
-            { type: 'image_url', image_url: { url: imageBase64.startsWith('data:') ? imageBase64 : `data:image/png;base64,${imageBase64}` } }
-          ]
-        }
-      ],
-      thinking: { type: 'disabled' }
+  try {
+    const imageUrl = imageBase64.startsWith('data:') ? imageBase64 : `data:image/png;base64,${imageBase64}`;
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        messages: [{ role: 'user', content: [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: imageUrl } }] }],
+        max_tokens: 2000,
+      }),
     });
-
-    return {
-      success: true,
-      analysis: response.choices?.[0]?.message?.content,
-      symbol,
-    };
+    if (!res.ok) throw new Error(`OpenAI Vision API hatası: ${res.status}`);
+    const data = await res.json();
+    return { success: true, analysis: data.choices?.[0]?.message?.content, symbol };
   } catch (error) {
-    console.error('VLM Error:', error);
     return { success: false, error: String(error) };
   }
 }
@@ -1357,56 +1102,18 @@ SORULAR: GARAN 3 ay sonraki fiyatı ne olur? | AKBNK ile karşılaştırır mıs
 
     let rawText = '';
 
-    // Once Groq dene, basarisiz olursa ZAI (Gemini) fallback
-    if (process.env.GROQ_API_KEY) {
-      const finalResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model: 'llama-3.3-70b-versatile',
-          messages: [
-            { role: 'system', content: systemPrompt },
-            ...conversationHistory.slice(-6).map((m: { role: string; content: string }) => ({
-              role: m.role,
-              content: m.content,
-            })),
-            { role: 'user', content: userPromptContent },
-          ],
-          temperature: 0.7,
-          max_tokens: 2000,
-        }),
-      });
-
-      if (finalResponse.ok) {
-        const finalData = await finalResponse.json();
-        rawText = finalData.choices?.[0]?.message?.content || '';
-      }
-    }
-
-    // ZAI (Gemini) fallback — Groq key yoksa veya basarisizsa
-    if (!rawText) {
-      try {
-        const zai = await ZAI.create();
-        const zaiResp = await zai.chat.completions.create({
-          messages: [
-            { role: 'system', content: systemPrompt },
-            ...conversationHistory.slice(-6).map((m: { role: string; content: string }) => ({
-              role: m.role as 'user' | 'assistant',
-              content: m.content,
-            })),
-            { role: 'user', content: userPromptContent },
-          ],
-          temperature: 0.7,
-          max_tokens: 2000,
-        });
-        rawText = zaiResp.choices?.[0]?.message?.content || '';
-      } catch (zaiErr) {
-        console.error('ZAI fallback error:', zaiErr);
-        rawText = `İşlem tamamlandı ama yanıt oluşturulamadı. Araçlar: ${immediateTools.join(', ')}`;
-      }
+    try {
+      rawText = await callOpenAI([
+        { role: 'system', content: systemPrompt },
+        ...conversationHistory.slice(-6).map((m: { role: string; content: string }) => ({
+          role: m.role,
+          content: m.content,
+        })),
+        { role: 'user', content: userPromptContent },
+      ], { temperature: 0.7, max_tokens: 2000 });
+    } catch (err) {
+      console.error('OpenAI error:', err);
+      rawText = `Araçlar çalıştı (${immediateTools.join(', ')}) ancak yanıt oluşturulamadı. OPENAI_API_KEY kontrol edin.`;
     }
 
     // Extract "SORULAR:" line for suggested questions
