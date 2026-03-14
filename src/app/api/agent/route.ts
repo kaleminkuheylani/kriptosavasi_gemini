@@ -358,14 +358,14 @@ async function webSearch(query: string) {
 // Step 1: LLM generates better search queries
 async function generateSearchQueries(userMessage: string): Promise<string[]> {
   try {
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.GROQ_API_KEY || 'gsk_demo'}`,
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY || process.env.GROQ_API_KEY || ''}`,
       },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: 'gpt-4o-mini',
         messages: [
           {
             role: 'system',
@@ -429,10 +429,10 @@ function extractSearchContent(rawResults: unknown): Array<{ title: string; snipp
   };
 
   tryExtract(rawResults);
-  return items.filter(i => i.title || i.snippet).slice(0, 10);
+  return items.filter(i => i.title || i.snippet).slice(0, 6);
 }
 
-// Step 3: Summarize extracted content with Groq
+// Step 3: Summarize extracted content with gpt-4o-mini
 async function summarizeSearchResults(
   items: Array<{ title: string; snippet: string; url?: string }>,
   userMessage: string
@@ -440,18 +440,18 @@ async function summarizeSearchResults(
   if (items.length === 0) return 'Arama sonucu bulunamadı.';
 
   const itemsText = items
-    .map((item, i) => `[${i + 1}] Başlık: ${item.title}\nİçerik: ${item.snippet}${item.url ? `\nKaynak: ${item.url}` : ''}`)
+    .map((item, i) => `[${i + 1}] Başlık: ${item.title}\nİçerik: ${item.snippet.slice(0, 300)}${item.url ? `\nKaynak: ${item.url}` : ''}`)
     .join('\n\n');
 
   try {
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.GROQ_API_KEY || 'gsk_demo'}`,
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY || process.env.GROQ_API_KEY || ''}`,
       },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: 'gpt-4o-mini',
         messages: [
           {
             role: 'system',
@@ -675,15 +675,15 @@ async function createPriceAlert(symbol: string, targetPrice: number, condition: 
 // TXT File Analysis
 async function readTxtFile(content: string, filename?: string) {
   try {
-    // Analyze the TXT content using Groq
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    // Analyze the TXT content using gpt-4o-mini
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.GROQ_API_KEY || 'gsk_demo'}`,
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY || process.env.GROQ_API_KEY || ''}`,
       },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: 'gpt-4o-mini',
         messages: [
           {
             role: 'system',
@@ -698,11 +698,11 @@ Türkçe yanıt ver ve profesyonel bir rapor formatı kullan.`
           },
           {
             role: 'user',
-            content: `Dosya adı: ${filename || 'bilinmiyor'}\n\nDosya içeriği:\n\`\`\`\n${content.slice(0, 10000)}\n\`\`\`\n\nBu dosyayı analiz et ve raporla.`
+            content: `Dosya adı: ${filename || 'bilinmiyor'}\n\nDosya içeriği:\n\`\`\`\n${content.slice(0, 5000)}\n\`\`\`\n\nBu dosyayı analiz et ve raporla.`
           }
         ],
         temperature: 0.3,
-        max_tokens: 2000,
+        max_tokens: 1200,
       }),
     });
 
@@ -715,7 +715,7 @@ Türkçe yanıt ver ve profesyonel bir rapor formatı kullan.`
         contentLength: content.length,
       };
     }
-    
+
     return { success: false, error: 'Analiz başarısız' };
   } catch (error) {
     return { success: false, error: String(error) };
@@ -1126,7 +1126,7 @@ function buildToolResultsText(toolResults: Record<string, unknown>): string {
       };
       const lines: string[] = [`### get_stock_price (kaynak: ${enhanced.priceSource || 'api'})`];
       if (enhanced.data) {
-        lines.push('**Fiyat Verisi:**\n' + JSON.stringify(enhanced.data, null, 2).slice(0, 600));
+        lines.push('**Fiyat Verisi:**\n' + JSON.stringify(enhanced.data, null, 2).slice(0, 400));
       }
       if (enhanced.historical) {
         const h = enhanced.historical;
@@ -1148,7 +1148,7 @@ function buildToolResultsText(toolResults: Record<string, unknown>): string {
       }
       parts.push(lines.join('\n'));
     } else {
-      parts.push(`### ${tool}\n${JSON.stringify(r.data, null, 2).slice(0, 1500)}`);
+      parts.push(`### ${tool}\n${JSON.stringify(r.data, null, 2).slice(0, 800)}`);
     }
   }
 
@@ -1336,24 +1336,24 @@ SORULAR: GARAN 3 ay sonraki fiyatı ne olur? | AKBNK ile karşılaştırır mıs
 
 "SORULAR:" satırı her zaman son satır olmalı, 3 kısa Türkçe soru içermeli.`;
 
-    const finalResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    const finalResponse = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.GROQ_API_KEY || 'gsk_demo'}`,
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY || process.env.GROQ_API_KEY || ''}`,
       },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: 'gpt-4o-mini',
         messages: [
           { role: 'system', content: systemPrompt },
-          ...conversationHistory.slice(-6).map((m: { role: string; content: string }) => ({
+          ...conversationHistory.slice(-4).map((m: { role: string; content: string }) => ({
             role: m.role,
             content: m.content,
           })),
           { role: 'user', content: userPromptContent },
         ],
         temperature: 0.7,
-        max_tokens: 2000,
+        max_tokens: 1500,
       }),
     });
 
