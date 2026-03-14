@@ -213,6 +213,9 @@ const TABS = [
   { id: 'alerts',    label: 'Bildirim',  icon: Bell },
 ];
 
+const LEGAL_DISCLAIMER_TEXT =
+  'Bu platform tamamen egitim amaclidir. Icerikler yatirim tavsiyesi degildir; finansal kararlarin hukuki ve mali sorumlulugu kullaniciya aittir.';
+
 export default function Home() {
   const { toast } = useToast();
   const router = useRouter();
@@ -252,7 +255,7 @@ export default function Home() {
   const [detailAnalysis, setDetailAnalysis] = useState<string | null>(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
   
-  // AI Agent
+  // Educational assistant
   const [agentOpen, setAgentOpen] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
@@ -363,12 +366,15 @@ export default function Home() {
     } catch {}
   }, []);
 
-  // Fetch similar stocks based on user's watchlist
+  // Fetch related stocks based on watchlist sectors (educational listing)
   const fetchSimilarStocks = useCallback(async () => {
     try {
-      // Get recommended stocks based on user's watchlist sectors
       const symbols = watchlist.map(item => item.symbol).join(',');
-      const response = await fetch(`/api/market?type=recommended&symbols=${symbols}`);
+      if (!symbols) {
+        setSimilarStocks([]);
+        return;
+      }
+      const response = await fetch(`/api/market?type=similar&symbol=${symbols}`);
       const data = await response.json();
       if (data.success) {
         setSimilarStocks(data.data);
@@ -467,7 +473,7 @@ export default function Home() {
       .flatMap(c => c.tools);
   };
 
-  // AI Agent Chat
+  // Educational assistant chat
   const sendToAgent = async () => {
     if (!chatInput.trim() || chatLoading) return;
 
@@ -936,12 +942,12 @@ export default function Home() {
       return { high: +h.toFixed(2), low: +l.toFixed(2), r236: +(h - d * 0.236).toFixed(2), r382: +(h - d * 0.382).toFixed(2), r500: +(h - d * 0.5).toFixed(2), r618: +(h - d * 0.618).toFixed(2) };
     })();
 
-    // Signal
+    // Composite educational status (no buy/sell phrasing)
     let signal = 'NÖTR';
-    if (rsi < 30 && bb && lastClose <= bb.lower) signal = 'GÜÇLÜ ALIM';
-    else if (rsi < 40) signal = 'ALIM';
-    else if (rsi > 70 && bb && lastClose >= bb.upper) signal = 'GÜÇLÜ SATIM';
-    else if (rsi > 60) signal = 'SATIM';
+    if (rsi < 30 && bb && lastClose <= bb.lower) signal = 'GÜÇLÜ POZİTİF MOMENTUM';
+    else if (rsi < 40) signal = 'POZİTİF MOMENTUM';
+    else if (rsi > 70 && bb && lastClose >= bb.upper) signal = 'GÜÇLÜ NEGATİF MOMENTUM';
+    else if (rsi > 60) signal = 'NEGATİF MOMENTUM';
 
     return { rsi, sma20, sma50, bb, macd, stochK, atr, fib, signal, lastClose };
   }, [historicalData]);
@@ -1165,6 +1171,9 @@ export default function Home() {
           </div>
         ) : (
           <>
+            <div className="mb-4 rounded-xl border border-amber-600/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-100">
+              {LEGAL_DISCLAIMER_TEXT}
+            </div>
             {/* Dashboard Tab */}
             {activeTab === 'dashboard' && (
               <div className="space-y-6">
@@ -1286,7 +1295,7 @@ export default function Home() {
 
                   {/* Similar Stocks - 5 items */}
                   <SectionCard 
-                    title="Sizin Icin Benzer Hisseler" 
+                    title="Takip Listesiyle Iliskili Hisseler" 
                     icon={Sparkles} 
                     color="text-violet-400"
                   >
@@ -1295,8 +1304,8 @@ export default function Home() {
                     )) : (
                       <div className="p-6 text-center text-slate-500">
                         <Sparkles className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                        <p>Takip listenize gore benzer hisseler onerecegiz</p>
-                        <p className="text-xs mt-1">Takip listenize hisse ekleyin</p>
+                        <p>Takip listenizdeki sektorlerle iliskili hisseler burada listelenir</p>
+                        <p className="text-xs mt-1">Listeyi doldurdukca egitim amacli karsilastirma verisi artar</p>
                       </div>
                     )}
                   </SectionCard>
@@ -1515,13 +1524,13 @@ export default function Home() {
                   <div className="p-12 text-center">
                     <Bell className="h-12 w-12 text-slate-600 mx-auto mb-4" />
                     <p className="text-slate-400 text-lg">Henuz bildirim yok</p>
-                    <p className="text-slate-500 text-sm mt-2">Fiyat bildirimleri olusturmak icin AI Agent'i kullanin</p>
+                    <p className="text-slate-500 text-sm mt-2">Fiyat bildirimi olusturmak icin analiz asistanini kullanin</p>
                     <Button 
                       className="mt-4 bg-gradient-to-r from-emerald-600 to-cyan-600"
                       onClick={() => setAgentOpen(true)}
                     >
                       <Bot className="h-4 w-4 mr-2" />
-                      AI Agent ile Bildirim Olustur
+                      Analiz Asistani ile Bildirim Olustur
                     </Button>
                   </div>
                 )}
@@ -1578,7 +1587,7 @@ export default function Home() {
                     </Button>
                     <Button size="sm" variant="outline" className="h-7 text-xs border-slate-700 text-slate-300"
                       onClick={() => { setAgentOpen(true); setChatInput(`${selectedStock.code} derin matematik analizi`); setDetailOpen(false); }}>
-                      <Bot className="h-3 w-3 mr-1" /> AI Sohbet
+                      <Bot className="h-3 w-3 mr-1" /> Analiz Sohbeti
                     </Button>
                   </div>
                 </div>
@@ -1589,7 +1598,7 @@ export default function Home() {
                 {([
                   { id: 'grafik' as const, label: '📊 Grafik' },
                   { id: 'teknik' as const, label: '📈 Teknik Analiz' },
-                  { id: 'ai'     as const, label: '🤖 AI Analiz' },
+                  { id: 'ai'     as const, label: '🧭 Egitimsel Analiz' },
                   { id: 'ozet'   as const, label: '📋 Özet' },
                 ]).map(tab => (
                   <button
@@ -1703,7 +1712,7 @@ export default function Home() {
                       <Button variant="outline" size="sm" className="border-slate-700 text-slate-400 text-xs"
                         onClick={analyzeCurrentChart} disabled={chartAnalyzing}>
                         <LineChartIcon className="h-3.5 w-3.5 mr-1.5"/>
-                        {chartAnalyzing ? 'Analiz ediliyor...' : 'Grafik AI Analizi'}
+                        {chartAnalyzing ? 'Analiz ediliyor...' : 'Grafik Egitimsel Analizi'}
                       </Button>
                     </div>
                   </div>
@@ -1722,16 +1731,16 @@ export default function Home() {
                       <div className="space-y-4">
                         {/* Signal banner */}
                         <div className={`rounded-2xl p-4 text-center ${
-                          techData.signal === 'GÜÇLÜ ALIM' ? 'bg-emerald-600/20 border border-emerald-500/40' :
-                          techData.signal === 'ALIM'       ? 'bg-emerald-700/15 border border-emerald-600/30' :
-                          techData.signal === 'GÜÇLÜ SATIM'? 'bg-red-600/20 border border-red-500/40' :
-                          techData.signal === 'SATIM'      ? 'bg-red-700/15 border border-red-600/30' :
+                          techData.signal === 'GÜÇLÜ POZİTİF MOMENTUM' ? 'bg-emerald-600/20 border border-emerald-500/40' :
+                          techData.signal === 'POZİTİF MOMENTUM'       ? 'bg-emerald-700/15 border border-emerald-600/30' :
+                          techData.signal === 'GÜÇLÜ NEGATİF MOMENTUM' ? 'bg-red-600/20 border border-red-500/40' :
+                          techData.signal === 'NEGATİF MOMENTUM'       ? 'bg-red-700/15 border border-red-600/30' :
                                                              'bg-slate-700/30 border border-slate-600/30'
                         }`}>
-                          <p className="text-xs text-slate-500 mb-1 uppercase tracking-wider">Bileşik Sinyal</p>
+                          <p className="text-xs text-slate-500 mb-1 uppercase tracking-wider">Bilesik Gosterge Durumu</p>
                           <p className={`text-2xl font-bold ${
-                            techData.signal.includes('ALIM') ? 'text-emerald-400' :
-                            techData.signal.includes('SATIM')? 'text-red-400' : 'text-slate-300'
+                            techData.signal.includes('POZİTİF') ? 'text-emerald-400' :
+                            techData.signal.includes('NEGATİF') ? 'text-red-400' : 'text-slate-300'
                           }`}>{techData.signal}</p>
                           <p className="text-xs text-slate-600 mt-1">RSI + Bollinger kombinasyonu</p>
                         </div>
@@ -1746,7 +1755,7 @@ export default function Home() {
                                 techData.rsi < 30 ? 'bg-emerald-500/20 text-emerald-400' :
                                 techData.rsi > 70 ? 'bg-red-500/20 text-red-400' : 'bg-slate-700 text-slate-400'
                               }`}>
-                                {techData.rsi < 30 ? 'Aşırı Satım' : techData.rsi > 70 ? 'Aşırı Alım' : 'Normal'}
+                                {techData.rsi < 30 ? 'Asiri Dusuk Bolge' : techData.rsi > 70 ? 'Asiri Yuksek Bolge' : 'Normal'}
                               </span>
                             </div>
                             <p className={`text-4xl font-bold mb-4 tabular-nums ${
@@ -1761,7 +1770,7 @@ export default function Home() {
                               <div className="absolute top-0 w-2 h-2 bg-white rounded-full shadow-md -translate-x-1/2" style={{ left:`${Math.min(Math.max(techData.rsi,0),100)}%` }}/>
                             </div>
                             <div className="flex justify-between text-[9px] text-slate-600 mt-1.5">
-                              <span>0 Satım</span><span>50</span><span>Alım 100</span>
+                              <span>0 Dusuk</span><span>50</span><span>Yuksek 100</span>
                             </div>
                           </div>
 
@@ -1773,7 +1782,7 @@ export default function Home() {
                                 techData.stochK < 20 ? 'bg-emerald-500/20 text-emerald-400' :
                                 techData.stochK > 80 ? 'bg-red-500/20 text-red-400' : 'bg-slate-700 text-slate-400'
                               }`}>
-                                {techData.stochK < 20 ? 'Aşırı Satım' : techData.stochK > 80 ? 'Aşırı Alım' : 'Normal'}
+                                {techData.stochK < 20 ? 'Asiri Dusuk Bolge' : techData.stochK > 80 ? 'Asiri Yuksek Bolge' : 'Normal'}
                               </span>
                             </div>
                             <p className={`text-4xl font-bold mb-4 tabular-nums ${
@@ -1800,7 +1809,7 @@ export default function Home() {
                             <div className="grid grid-cols-3 gap-3 text-center">
                               {[
                                 { label:'MACD Çizgisi', value: techData.macd.value, color: techData.macd.value >= 0 ? 'text-emerald-400' : 'text-red-400' },
-                                { label:'Sinyal Çizgisi', value: techData.macd.signal, color: 'text-yellow-400' },
+                                { label:'Referans Çizgisi', value: techData.macd.signal, color: 'text-yellow-400' },
                                 { label:'Histogram', value: techData.macd.histogram, color: techData.macd.histogram >= 0 ? 'text-emerald-400' : 'text-red-400' },
                               ].map(m => (
                                 <div key={m.label} className="bg-slate-800/60 rounded-xl p-3">
@@ -1900,20 +1909,20 @@ export default function Home() {
                   </div>
                 )}
 
-                {/* ─── AI ANALİZ TAB ─── */}
+                {/* ─── EGITIMSEL ANALIZ TAB ─── */}
                 {detailTab === 'ai' && (
                   <div className="p-5">
                     {analysisLoading ? (
                       <div className="flex flex-col items-center justify-center py-20 gap-4">
                         <Loader2 className="h-10 w-10 animate-spin text-emerald-400"/>
-                        <p className="text-slate-400 text-sm">AI analizi hazırlanıyor...</p>
+                        <p className="text-slate-400 text-sm">Egitimsel analiz hazirlaniyor...</p>
                         <p className="text-slate-600 text-xs">Piyasa verileri ve haberler işleniyor</p>
                       </div>
                     ) : detailAnalysis ? (
                       <div className="space-y-4">
                         <div className="flex items-center gap-2 text-xs text-slate-500">
                           <Sparkles className="h-3.5 w-3.5 text-emerald-400"/>
-                          <span>AI tarafından oluşturuldu · Yatırım tavsiyesi değildir · Hukuki ve mali sorumluluk kullanıcıya aittir</span>
+                          <span>Egitimsel amacli otomatik olusturuldu · Yatirim tavsiyesi degildir · Hukuki ve mali sorumluluk kullaniciya aittir</span>
                         </div>
                         <div className="bg-slate-800/30 rounded-2xl p-5 text-sm text-slate-300 leading-relaxed whitespace-pre-wrap border border-slate-700/40">
                           {detailAnalysis}
@@ -1925,7 +1934,7 @@ export default function Home() {
                           </Button>
                           <Button size="sm" variant="outline" className="border-slate-700 text-slate-400 text-xs h-8"
                             onClick={() => { setAgentOpen(true); setChatInput(`${selectedStock.code} hakkında sormak istiyorum`); setDetailOpen(false); }}>
-                            <Bot className="h-3 w-3 mr-1.5"/> AI Sohbette Devam Et
+                            <Bot className="h-3 w-3 mr-1.5"/> Analiz Sohbetinde Devam Et
                           </Button>
                         </div>
                       </div>
@@ -1934,7 +1943,7 @@ export default function Home() {
                         <div className="w-16 h-16 rounded-2xl bg-slate-800 flex items-center justify-center">
                           <Bot className="h-8 w-8 text-slate-600"/>
                         </div>
-                        <p className="text-slate-400 font-medium">AI analizi henüz başlatılmadı</p>
+                        <p className="text-slate-400 font-medium">Egitimsel analiz henuz baslatilmadi</p>
                         <p className="text-slate-600 text-xs text-center max-w-xs">
                           {selectedStock.code} için güncel fiyat, geçmiş veri ve piyasa haberleri analiz edilecek
                         </p>
@@ -2023,7 +2032,7 @@ export default function Home() {
                       </Button>
                       <Button variant="outline" className="w-full border-slate-700 text-slate-300"
                         onClick={() => { setDetailTab('ai'); if (!detailAnalysis && !analysisLoading) fetchAIAnalysis(selectedStock.code); }}>
-                        <Sparkles className="h-4 w-4 mr-2"/> AI Analizi Görüntüle
+                        <Sparkles className="h-4 w-4 mr-2"/> Egitimsel Analizi Goruntule
                       </Button>
                     </div>
                   </div>
@@ -2035,7 +2044,7 @@ export default function Home() {
         </DialogContent>
       </Dialog>
 
-      {/* AI Agent Modal */}
+      {/* Egitimsel Asistan Modal */}
       <Dialog open={agentOpen} onOpenChange={setAgentOpen}>
         <DialogContent className="max-w-3xl max-h-[85vh] bg-slate-900 border-slate-800 text-white flex flex-col">
           <DialogHeader>
@@ -2045,8 +2054,8 @@ export default function Home() {
                   <Bot className="h-6 w-6 text-white" />
                 </div>
                 <div>
-                  <DialogTitle className="text-lg">AI Finans Asistani</DialogTitle>
-                  <p className="text-xs text-slate-400">21 araç · Matematiksel Derin Analiz</p>
+                  <DialogTitle className="text-lg">Egitimsel Finans Asistani</DialogTitle>
+                  <p className="text-xs text-slate-400">21 arac · Veri odakli egitimsel analiz</p>
                 </div>
               </div>
               <div className="flex gap-2">

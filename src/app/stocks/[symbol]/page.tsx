@@ -130,6 +130,11 @@ function formatNewsDate(value: string): string {
   });
 }
 
+function formatStatusLabel(value: string | null | undefined): string {
+  if (!value) return '-';
+  return value.replaceAll('_', ' ');
+}
+
 function calculateSMA(values: number[], period: number): number | null {
   if (values.length < period) return null;
   const last = values.slice(-period);
@@ -205,8 +210,8 @@ function calculateStochastic(highs: number[], lows: number[], closes: number[], 
   if (highestHigh === lowestLow) return { value: 50, signal: 'NOTR' };
 
   const k = +(((lastClose - lowestLow) / (highestHigh - lowestLow)) * 100).toFixed(2);
-  if (k < 20) return { value: k, signal: 'ASIRI_SATIM' };
-  if (k > 80) return { value: k, signal: 'ASIRI_ALIM' };
+  if (k < 20) return { value: k, signal: 'ASIRI_DUSUK_BOLGE' };
+  if (k > 80) return { value: k, signal: 'ASIRI_YUKSEK_BOLGE' };
   return { value: k, signal: 'NOTR' };
 }
 
@@ -251,8 +256,8 @@ function calculateWilliamsR(highs: number[], lows: number[], closes: number[], p
   if (highestHigh === lowestLow) return { value: -50, signal: 'NOTR' };
 
   const r = +(((highestHigh - lastClose) / (highestHigh - lowestLow)) * -100).toFixed(2);
-  if (r > -20) return { value: r, signal: 'ASIRI_ALIM' };
-  if (r < -80) return { value: r, signal: 'ASIRI_SATIM' };
+  if (r > -20) return { value: r, signal: 'ASIRI_YUKSEK_BOLGE' };
+  if (r < -80) return { value: r, signal: 'ASIRI_DUSUK_BOLGE' };
   return { value: r, signal: 'NOTR' };
 }
 
@@ -267,8 +272,8 @@ function calculateCCI(highs: number[], lows: number[], closes: number[], period 
   const lastTypical = (highs[highs.length - 1] + lows[lows.length - 1] + closes[closes.length - 1]) / 3;
   const cci = meanDev === 0 ? 0 : +(((lastTypical - mean) / (0.015 * meanDev)).toFixed(2));
 
-  if (cci > 100) return { value: cci, signal: 'ASIRI_ALIM' };
-  if (cci < -100) return { value: cci, signal: 'ASIRI_SATIM' };
+  if (cci > 100) return { value: cci, signal: 'ASIRI_YUKSEK_BOLGE' };
+  if (cci < -100) return { value: cci, signal: 'ASIRI_DUSUK_BOLGE' };
   return { value: cci, signal: 'NOTR' };
 }
 
@@ -306,17 +311,17 @@ function composeDeepSignal(input: {
   let bull = 0;
   let bear = 0;
   if (input.macdTrend === 'YUKARI') bull++; else if (input.macdTrend === 'ASAGI') bear++;
-  if (input.stochasticSignal === 'ASIRI_SATIM') bull++; else if (input.stochasticSignal === 'ASIRI_ALIM') bear++;
-  if (input.williamsSignal === 'ASIRI_SATIM') bull++; else if (input.williamsSignal === 'ASIRI_ALIM') bear++;
-  if (input.cciSignal === 'ASIRI_SATIM') bull++; else if (input.cciSignal === 'ASIRI_ALIM') bear++;
+  if (input.stochasticSignal === 'ASIRI_DUSUK_BOLGE') bull++; else if (input.stochasticSignal === 'ASIRI_YUKSEK_BOLGE') bear++;
+  if (input.williamsSignal === 'ASIRI_DUSUK_BOLGE') bull++; else if (input.williamsSignal === 'ASIRI_YUKSEK_BOLGE') bear++;
+  if (input.cciSignal === 'ASIRI_DUSUK_BOLGE') bull++; else if (input.cciSignal === 'ASIRI_YUKSEK_BOLGE') bear++;
   if (input.rocTrend === 'POZITIF') bull++; else if (input.rocTrend === 'NEGATIF') bear++;
   if (input.obvTrend === 'POZITIF') bull++; else if (input.obvTrend === 'NEGATIF') bear++;
 
   let composite = 'NOTR';
-  if (bull >= 4) composite = 'GUCLU_ALIM';
-  else if (bull >= 3) composite = 'ALIM';
-  else if (bear >= 4) composite = 'GUCLU_SATIM';
-  else if (bear >= 3) composite = 'SATIM';
+  if (bull >= 4) composite = 'GUCLU_POZITIF_MOMENTUM';
+  else if (bull >= 3) composite = 'POZITIF_MOMENTUM';
+  else if (bear >= 4) composite = 'GUCLU_NEGATIF_MOMENTUM';
+  else if (bear >= 3) composite = 'NEGATIF_MOMENTUM';
 
   return { bull, bear, composite };
 }
@@ -470,7 +475,7 @@ export default function StockDetailPage() {
   }, [fetchComments, fetchCurrentUser]);
 
   useEffect(() => {
-    // Avoid showing stale AI comment when symbol/timeframe changes
+    // Avoid showing stale educational commentary when symbol/timeframe changes
     setDeepAiComment(null);
   }, [symbol, timeframe]);
 
@@ -657,7 +662,7 @@ Kurallar:
 - Maddeli ve sade yaz
 - Sadece verilen verilerden çıkarım yap
 - Kesin hüküm verme
-- Al/Sat/Tut, öneri/tavsiye veya "sinyal" ifadesi kullanma
+- Yonlendirici eylem cagrisi, oneriler veya kesin yon ifadesi kullanma
 - Son satıra şu ifadeyi aynen ekle: "Yasal Sorumluluk Notu: Bu içerik yalnızca bilgilendirme amaçlıdır. Verilecek tüm yatırım kararları ile doğabilecek hukuki ve mali sorumluluk tamamen kullanıcıya aittir."
 
 Hisse: ${stockDetail?.code ?? symbol}
@@ -692,14 +697,14 @@ Low: ${deepAnalysis.fibonacci?.low ?? '-'}`;
       });
       const data = await response.json();
       if (!data.success) {
-        throw new Error(data.error || 'AI yorum olusturulamadi');
+        throw new Error(data.error || 'Egitimsel degerlendirme olusturulamadi');
       }
 
-      setDeepAiComment((data.data?.analysis as string) || 'AI yorumu alinamadi.');
+      setDeepAiComment((data.data?.analysis as string) || 'Egitimsel degerlendirme alinamadi.');
     } catch (error) {
       toast({
         title: 'Hata',
-        description: error instanceof Error ? error.message : 'AI yorum olusturulamadi',
+        description: error instanceof Error ? error.message : 'Egitimsel degerlendirme olusturulamadi',
         variant: 'destructive',
       });
     } finally {
@@ -785,6 +790,10 @@ Low: ${deepAnalysis.fibonacci?.low ?? '-'}`;
               {isInWatchlist ? 'Takipten Cikar' : 'Takibe Al'}
             </Button>
           </div>
+        </div>
+
+        <div className="rounded-lg border border-amber-600/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+          Bu sayfadaki tum icerikler egitim amaclidir. Yatirim tavsiyesi degildir; finansal kararlarin hukuki ve mali sorumlulugu kullaniciya aittir.
         </div>
 
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -997,7 +1006,7 @@ Low: ${deepAnalysis.fibonacci?.low ?? '-'}`;
                 <span>{volatility ? `${formatNumber(volatility)}%` : '-'}</span>
               </div>
               <p className="pt-1 text-xs text-slate-400">
-                RSI &gt; 70 asiri alim, RSI &lt; 30 asiri satim bolgesini isaret edebilir.
+                RSI &gt; 70 asiri yuksek, RSI &lt; 30 asiri dusuk bolgeyi isaret edebilir.
               </p>
             </CardContent>
           </Card>
@@ -1031,7 +1040,7 @@ Low: ${deepAnalysis.fibonacci?.low ?? '-'}`;
           <CardHeader className="flex flex-row items-center justify-between gap-3">
             <CardTitle className="flex items-center gap-2">
               <Sparkles className="h-5 w-5 text-violet-400" />
-              Derinlik Analiz Araci (Ajan Benzeri)
+              Egitimsel Derinlik Analizi
             </CardTitle>
             <Button
               size="sm"
@@ -1040,7 +1049,7 @@ Low: ${deepAnalysis.fibonacci?.low ?? '-'}`;
               disabled={!deepAnalysis || deepAiLoading}
             >
               {deepAiLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-              AI Yorumla
+              Degerlendirme Olustur
             </Button>
           </CardHeader>
           <CardContent>
@@ -1049,18 +1058,18 @@ Low: ${deepAnalysis.fibonacci?.low ?? '-'}`;
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge
                     className={
-                      deepAnalysis.composite === 'GUCLU_ALIM'
+                      deepAnalysis.composite === 'GUCLU_POZITIF_MOMENTUM'
                         ? 'bg-emerald-600/20 text-emerald-400'
-                        : deepAnalysis.composite === 'ALIM'
+                        : deepAnalysis.composite === 'POZITIF_MOMENTUM'
                         ? 'bg-emerald-500/20 text-emerald-300'
-                        : deepAnalysis.composite === 'GUCLU_SATIM'
+                        : deepAnalysis.composite === 'GUCLU_NEGATIF_MOMENTUM'
                         ? 'bg-red-600/20 text-red-400'
-                        : deepAnalysis.composite === 'SATIM'
+                        : deepAnalysis.composite === 'NEGATIF_MOMENTUM'
                         ? 'bg-red-500/20 text-red-300'
                         : 'bg-slate-700 text-slate-200'
                     }
                   >
-                    Bilesik Durum: {deepAnalysis.composite.replaceAll('_', ' ')}
+                    Bilesik Gosterge Durumu: {deepAnalysis.composite.replaceAll('_', ' ')}
                   </Badge>
                   <Badge variant="secondary" className="bg-slate-800 text-slate-300">
                     Bull: {deepAnalysis.bull}
@@ -1083,7 +1092,7 @@ Low: ${deepAnalysis.fibonacci?.low ?? '-'}`;
                   <div className="rounded-lg bg-slate-800/50 p-3">
                     <p className="text-slate-300">Stochastic %K</p>
                     <p className="font-medium text-white">
-                      {deepAnalysis.stochastic ? `${formatNumber(deepAnalysis.stochastic.value)} (${deepAnalysis.stochastic.signal})` : '-'}
+                      {deepAnalysis.stochastic ? `${formatNumber(deepAnalysis.stochastic.value)} (${formatStatusLabel(deepAnalysis.stochastic.signal)})` : '-'}
                     </p>
                   </div>
                   <div className="rounded-lg bg-slate-800/50 p-3">
@@ -1122,11 +1131,11 @@ Low: ${deepAnalysis.fibonacci?.low ?? '-'}`;
                     <div className="space-y-1 text-slate-300">
                       <div className="flex justify-between">
                         <span>Williams %R</span>
-                        <span>{deepAnalysis.williamsR ? `${formatNumber(deepAnalysis.williamsR.value)} (${deepAnalysis.williamsR.signal})` : '-'}</span>
+                        <span>{deepAnalysis.williamsR ? `${formatNumber(deepAnalysis.williamsR.value)} (${formatStatusLabel(deepAnalysis.williamsR.signal)})` : '-'}</span>
                       </div>
                       <div className="flex justify-between">
                         <span>CCI</span>
-                        <span>{deepAnalysis.cci ? `${formatNumber(deepAnalysis.cci.value)} (${deepAnalysis.cci.signal})` : '-'}</span>
+                        <span>{deepAnalysis.cci ? `${formatNumber(deepAnalysis.cci.value)} (${formatStatusLabel(deepAnalysis.cci.signal)})` : '-'}</span>
                       </div>
                       <div className="flex justify-between">
                         <span>OBV</span>
@@ -1146,7 +1155,7 @@ Low: ${deepAnalysis.fibonacci?.low ?? '-'}`;
 
                 {deepAiComment ? (
                   <div className="rounded-lg border border-violet-700/50 bg-violet-900/15 p-3">
-                    <p className="mb-2 text-sm font-medium text-violet-300">AI Derinlik Yorumu</p>
+                    <p className="mb-2 text-sm font-medium text-violet-300">Egitimsel Derinlik Degerlendirmesi</p>
                     <p className="whitespace-pre-wrap text-sm text-slate-100">{deepAiComment}</p>
                     <p className="mt-2 text-xs text-slate-400">
                       Yasal Sorumluluk Notu: Bu içerik yalnızca bilgilendirme amaçlıdır. Verilecek tüm yatırım kararları ile doğabilecek hukuki ve mali sorumluluk tamamen kullanıcıya aittir.

@@ -134,7 +134,7 @@ export async function POST(request: NextRequest) {
     const { stock, historical } = await fetchStockData(symbol.toUpperCase());
 
     // Prepare analysis prompt
-    const systemPrompt = `Sen BIST (Borsa İstanbul) verilerini objektif şekilde yorumlayan bir finansal analiz asistanısın. Türkçe yanıt ver ve profesyonel bir dil kullan.
+    const systemPrompt = `Sen BIST (Borsa İstanbul) verilerini objektif şekilde yorumlayan egitim odakli bir finansal analiz asistanısın. Türkçe yanıt ver ve profesyonel bir dil kullan.
 
 Analizlerin şunları içermeli:
 1. 📊 Fiyat Performansı - Son dönemdeki fiyat değişimleri ve trend analizi
@@ -143,8 +143,8 @@ Analizlerin şunları içermeli:
 4. 🧾 Objektif Sonuç - Sadece veri temelli çıkarımlar, yönlendirme yok
 
 Kurallar:
-- "Al/Sat/Bekle", "öneri", "tavsiye" gibi yönlendirici ifadeler kullanma.
-- "Sinyal veriyor" gibi kesin öneri dili kurma; yalnızca göstergelerin mevcut durumunu belirt.
+- Yönlendirici eylem çağrısı, öneri veya tavsiye içeren ifadeler kullanma.
+- Kesin öneri dili kurma; yalnızca göstergelerin mevcut durumunu belirt.
 - Yanıtları madde madde ve okunabilir formatta ver.
 - Yanıtın sonunda şu ifadeyi aynen ekle: "${LEGAL_DISCLAIMER}"`;
 
@@ -251,7 +251,7 @@ ${LEGAL_DISCLAIMER}`;
 
     return NextResponse.json({
       success: false,
-      error: 'AI analizi yapılamadı. Lütfen tekrar deneyin.',
+      error: 'Egitimsel analiz olusturulamadi. Lutfen tekrar deneyin.',
     }, { status: 500 });
   }
 }
