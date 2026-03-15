@@ -18,17 +18,16 @@ interface RpmEntry { requests: number[] }
 const rpmStore = new Map<string, RpmEntry>();
 
 const LIMITS = {
-  user:  { rpm: 15, dailyTokens: 60_000 },
-  guest: { rpm:  5, dailyTokens: 15_000 },
+  user: { rpm: 15, dailyTokens: 50_000 },
 };
 
 const LEGAL_DISCLAIMER =
   'Yasal Sorumluluk Notu: Bu içerik yalnızca bilgilendirme amaçlıdır. Verilecek tüm yatırım kararları ile doğabilecek hukuki ve mali sorumluluk tamamen kullanıcıya aittir.';
 
 /** Per-minute sliding window — checked synchronously, no DB needed */
-function checkRpm(userId: string | null): boolean {
-  const key = userId || 'guest';
-  const limits = userId ? LIMITS.user : LIMITS.guest;
+function checkRpm(userId: string): boolean {
+  const key = userId;
+  const limits = LIMITS.user;
   if (!rpmStore.has(key)) rpmStore.set(key, { requests: [] });
   const entry = rpmStore.get(key)!;
   const now = Date.now();
@@ -40,20 +39,14 @@ function checkRpm(userId: string | null): boolean {
 
 /**
  * Check + record daily usage in Supabase user_usage table.
- * Returns { throttled, maxTokens }.
- * Falls back to unthrottled on DB error so users aren't blocked by Supabase issues.
+ * Returns { throttled, maxTokens, remainingTokens }.
+ * Falls back to conservative limits on DB error.
  */
 async function checkAndRecordUsage(
-  userId: string | null,
+  userId: string,
   sb: ReturnType<typeof serverClient>,
-): Promise<{ throttled: boolean; maxTokens: number }> {
-  const limits = userId ? LIMITS.user : LIMITS.guest;
-
-  // Guests: no DB tracking, just RPM
-  if (!userId) {
-    return { throttled: false, maxTokens: 1500 };
-  }
-
+): Promise<{ throttled: boolean; maxTokens: number; remainingTokens: number }> {
+  const limits = LIMITS.user;
   try {
     const today = new Date().toISOString().slice(0, 10);
 
@@ -73,11 +66,16 @@ async function checkAndRecordUsage(
       { onConflict: 'user_id,date' }
     );
 
-    if (tokenCount >= limits.dailyTokens) return { throttled: true,  maxTokens: 0   };
-    if (requestCount >= limits.rpm * 10)  return { throttled: false, maxTokens: 400 }; // soft
-    return { throttled: false, maxTokens: 1500 };
+    const remainingTokens = Math.max(0, limits.dailyTokens - tokenCount);
+    if (remainingTokens <= 0) return { throttled: true, maxTokens: 0, remainingTokens: 0 };
+
+    // Per-response cap adapts to remaining budget + sustained high traffic.
+    const baseCap = Math.max(250, Math.min(1500, remainingTokens));
+    const adaptiveCap = requestCount >= limits.rpm * 10 ? Math.min(baseCap, 500) : baseCap;
+    return { throttled: false, maxTokens: adaptiveCap, remainingTokens };
   } catch {
-    return { throttled: false, maxTokens: 1500 }; // fail open
+    // Fail-open with conservative max tokens to avoid runaway usage.
+    return { throttled: false, maxTokens: 500, remainingTokens: 500 };
   }
 }
 
@@ -1854,6 +1852,16 @@ export async function POST(request: NextRequest) {
   try {
     // Get current user
     const userId = await getCurrentUserId();
+    if (!userId) {
+      return NextResponse.json(
+        {
+          success: false,
+          requiresAuth: true,
+          error: 'Chatbot kullanmak için önce kayıt olup giriş yapmalısınız.',
+        },
+        { status: 401 }
+      );
+    }
     
     const body = await request.json();
     const {
@@ -1873,18 +1881,29 @@ export async function POST(request: NextRequest) {
 
     // ── Rate Limiting ─────────────────────────────────────────────────────
     const rpmThrottled = checkRpm(userId);
-    const sb = await getAgentSupabaseClient();
-    const { throttled, maxTokens: allowedTokens } = await checkAndRecordUsage(userId, sb);
-    if (throttled && !rpmThrottled) {
-      // Günlük bütçe tükendi — sessizce kısa yanıt ver
-      return NextResponse.json({
-        success: true,
-        response: '📊 Şu an yoğun kullanım var, biraz sonra tekrar dene.',
-        messages: ['📊 Şu an yoğun kullanım var, biraz sonra tekrar dene.'],
-        suggestedQuestions: [],
-        toolsUsed: [],
-        timestamp: new Date().toISOString(),
-      });
+    const { sb } = await getAgentSupabaseClient();
+    if (rpmThrottled) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Çok hızlı istek gönderiyorsunuz. Lütfen kısa bir süre bekleyin.',
+        },
+        { status: 429 }
+      );
+    }
+    const { throttled, maxTokens: allowedTokens, remainingTokens } = await checkAndRecordUsage(userId, sb);
+    if (throttled) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Günlük token limitiniz doldu. Lütfen yarın tekrar deneyin.',
+          usage: {
+            dailyTokenLimit: LIMITS.user.dailyTokens,
+            remainingTokens: 0,
+          },
+        },
+        { status: 429 }
+      );
     }
     // ─────────────────────────────────────────────────────────────────────
 
@@ -2085,6 +2104,7 @@ Thread mesajlarının birinde şu cümle aynen geçmeli: "${LEGAL_DISCLAIMER}"`;
       const finalResponse = await zai.chat.completions.create({
         messages: chatMessages,
         thinking: { type: 'disabled' },
+        max_tokens: allowedTokens,
       } as Parameters<typeof zai.chat.completions.create>[0]);
       rawText = (finalResponse as { choices?: Array<{ message?: { content?: string } }> }).choices?.[0]?.message?.content || '';
       // Approximate token usage
@@ -2147,6 +2167,10 @@ Thread mesajlarının birinde şu cümle aynen geçmeli: "${LEGAL_DISCLAIMER}"`;
       toolsUsed: immediateTools,
       toolResults,
       pendingActions: pendingActions.length > 0 ? pendingActions : undefined,
+      usage: {
+        dailyTokenLimit: LIMITS.user.dailyTokens,
+        remainingTokens: Math.max(0, remainingTokens),
+      },
       timestamp: new Date().toISOString(),
     });
 

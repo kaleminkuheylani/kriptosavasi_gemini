@@ -485,8 +485,23 @@ export default function Home() {
       .flatMap(c => c.tools);
   };
 
+  const promptAuthForChatbot = (description?: string) => {
+    setAuthMode('register');
+    setAuthOpen(true);
+    setPasswordInput('');
+    toast({
+      title: 'Giris gerekli',
+      description: description ?? 'Chatbotu kullanmak için önce kayıt olup giriş yapmalısınız.',
+      variant: 'destructive',
+    });
+  };
+
   // Educational assistant chat
   const sendToAgent = async () => {
+    if (!currentUser) {
+      promptAuthForChatbot();
+      return;
+    }
     if (!chatInput.trim() || chatLoading) return;
 
     const userMessage = chatInput.trim();
@@ -506,6 +521,10 @@ export default function Home() {
       });
       
       const data = await response.json();
+      if (!response.ok && data?.requiresAuth) {
+        promptAuthForChatbot(data.error);
+        return;
+      }
       
       if (data.success) {
         const threadMessages: string[] = data.messages && data.messages.length > 0
@@ -560,7 +579,7 @@ export default function Home() {
       } else {
         setChatMessages(prev => [...prev, {
           role: 'assistant',
-          content: 'Bir hata oluştu. Lütfen tekrar deneyin.',
+          content: data.error || 'Bir hata oluştu. Lütfen tekrar deneyin.',
           timestamp: new Date(),
         }]);
       }
@@ -577,6 +596,10 @@ export default function Home() {
 
   // Confirm pending actions
   const confirmPendingActions = async (actions: PendingAction[], msgIdx: number) => {
+    if (!currentUser) {
+      promptAuthForChatbot();
+      return;
+    }
     // Disable pending on the message
     setChatMessages(prev => prev.map((m, i) =>
       i === msgIdx ? { ...m, pendingActions: undefined } : m
@@ -595,10 +618,14 @@ export default function Home() {
         body: JSON.stringify({ confirmActions: actions }),
       });
       const data = await response.json();
+      if (!response.ok && data?.requiresAuth) {
+        promptAuthForChatbot(data.error);
+        return;
+      }
 
       setChatMessages(prev => [...prev, {
         role: 'assistant',
-        content: data.success ? data.response : 'İşlem sırasında hata oluştu.',
+        content: data.success ? data.response : (data.error || 'İşlem sırasında hata oluştu.'),
         toolsUsed: data.toolsUsed,
         timestamp: new Date(),
       }]);
@@ -636,6 +663,12 @@ export default function Home() {
 
   // TXT File Upload Handler
   const handleTxtUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!currentUser) {
+      promptAuthForChatbot();
+      if (txtInputRef.current) txtInputRef.current.value = '';
+      return;
+    }
+
     const file = e.target.files?.[0];
     if (!file) return;
     
@@ -663,6 +696,10 @@ export default function Home() {
       });
       
       const data = await response.json();
+      if (!response.ok && data?.requiresAuth) {
+        promptAuthForChatbot(data.error);
+        return;
+      }
       
       if (data.success) {
         setChatMessages(prev => [...prev, {
@@ -693,6 +730,12 @@ export default function Home() {
 
   // Image Upload Handler
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, symbol?: string) => {
+    if (!currentUser) {
+      promptAuthForChatbot();
+      if (imageInputRef.current) imageInputRef.current.value = '';
+      return;
+    }
+
     const file = e.target.files?.[0];
     if (!file) return;
     
@@ -723,6 +766,12 @@ export default function Home() {
         });
         
         const data = await response.json();
+        if (!response.ok && data?.requiresAuth) {
+          promptAuthForChatbot(data.error);
+          setChatLoading(false);
+          if (imageInputRef.current) imageInputRef.current.value = '';
+          return;
+        }
         
         if (data.success) {
           setChatMessages(prev => [...prev, {
@@ -756,6 +805,10 @@ export default function Home() {
 
   // Analyze current chart
   const analyzeCurrentChart = async () => {
+    if (!currentUser) {
+      promptAuthForChatbot();
+      return;
+    }
     if (!selectedStock || !historicalData.length) return;
     
     setChartAnalyzing(true);
@@ -794,6 +847,10 @@ export default function Home() {
       });
       
       const data = await response.json();
+      if (!response.ok && data?.requiresAuth) {
+        promptAuthForChatbot(data.error);
+        return;
+      }
       
       if (data.success) {
         setChatMessages(prev => [...prev, {
@@ -2377,7 +2434,7 @@ export default function Home() {
           {/* Chat Input */}
           <div className="flex gap-2 pt-4 border-t border-slate-800">
             <Input
-              placeholder="Mesajinizi yazin..."
+              placeholder={currentUser ? 'Mesajinizi yazin...' : 'Chatbotu kullanmak icin giris yapin'}
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
               onKeyDown={(e) => {
@@ -2386,11 +2443,12 @@ export default function Home() {
                   sendToAgent();
                 }
               }}
+              disabled={!currentUser}
               className="bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 focus-visible:ring-emerald-500"
             />
             <Button
               onClick={sendToAgent}
-              disabled={chatLoading || !chatInput.trim()}
+              disabled={!currentUser || chatLoading || !chatInput.trim()}
               className="bg-emerald-600 hover:bg-emerald-700"
             >
               <Send className="h-4 w-4" />
