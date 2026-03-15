@@ -41,29 +41,24 @@ interface AgentResponse {
 
 const TOOL_CATEGORIES = [
   {
-    id: 'price',
-    label: 'Fiyat & Teknik',
-    tools: ['get_stock_price', 'get_stock_history', 'technical_indicators', 'compare_stocks', 'deep_mathematical_analysis'],
+    id: 'snapshot',
+    label: 'Piyasa Ozeti',
+    tools: ['get_crypto_snapshot'],
   },
   {
-    id: 'news',
-    label: 'Haber & KAP',
-    tools: ['web_search', 'read_document', 'get_kap_data', 'get_economic_calendar'],
+    id: 'asset',
+    label: 'Coin Detay',
+    tools: ['get_asset_detail'],
   },
   {
-    id: 'portfolio',
-    label: 'Portfoy',
-    tools: ['get_watchlist', 'add_to_watchlist', 'remove_from_watchlist', 'get_price_alerts', 'create_price_alert', 'analyze_portfolio'],
+    id: 'txt',
+    label: 'TXT Analizi',
+    tools: ['read_txt_file'],
   },
   {
-    id: 'market',
-    label: 'Piyasa Tarama',
-    tools: ['scan_market', 'get_top_gainers', 'get_top_losers', 'stock_screener'],
-  },
-  {
-    id: 'files',
-    label: 'Dosya & Gorsel',
-    tools: ['read_txt_file', 'analyze_chart_image'],
+    id: 'image',
+    label: 'Grafik Gorsel Analizi',
+    tools: ['analyze_chart_image'],
   },
 ];
 
@@ -370,45 +365,105 @@ export default function AssistantPage() {
 
   return (
     <main className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-slate-100">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-4 py-8 md:px-8">
-        <section className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-900/70 p-4">
-          <div className="space-y-1">
-            <h1 className="inline-flex items-center gap-2 text-2xl font-bold">
-              <Bot className="h-6 w-6 text-cyan-400" />
-              AI Finans Asistani
-            </h1>
-            <p className="text-sm text-slate-300">
-              Eski chatbot fonksiyonlari korunmustur: tool secimi, dosya/gorsel analizi ve onayli islemler.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            {authStateLoading ? (
-              <Badge variant="outline" className="border-slate-700 text-slate-300">Kullanici kontrol ediliyor...</Badge>
-            ) : currentUser ? (
-              <Badge variant="outline" className="border-emerald-500/30 text-emerald-300">{currentUser.rumuz}</Badge>
-            ) : (
-              <Badge variant="outline" className="border-amber-500/30 text-amber-300">Giris gerekli</Badge>
-            )}
-            <Button asChild variant="outline" className="border-slate-700 bg-slate-900 hover:bg-slate-800">
-              <Link href="/">
-                <ChevronLeft className="mr-1 h-4 w-4" />
-                Dashboard
-              </Link>
-            </Button>
-          </div>
-        </section>
+      <div className="overflow-x-auto">
+      <div className="mx-auto w-full min-w-[1400px] max-w-[1880px] px-8 py-8">
+        <div className="grid grid-cols-[280px_minmax(0,1fr)] gap-6">
+          <aside className="sticky top-6 space-y-4 self-start">
+            <Card className="border-slate-800 bg-slate-900/70">
+              <CardHeader className="space-y-2">
+                <CardTitle className="inline-flex items-center gap-2 text-lg">
+                  <Bot className="h-5 w-5 text-cyan-400" />
+                  Asistan Paneli
+                </CardTitle>
+                <CardDescription>CoinMarketCap tabanli kripto analiz asistani</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <Button asChild variant="outline" className="w-full border-slate-700 bg-slate-900 hover:bg-slate-800">
+                  <Link href="/">
+                    <ChevronLeft className="mr-2 h-4 w-4" />
+                    Dashboard
+                  </Link>
+                </Button>
+                {authStateLoading ? (
+                  <Badge variant="outline" className="w-full justify-center border-slate-700 text-slate-300">
+                    Kullanici kontrol ediliyor...
+                  </Badge>
+                ) : currentUser ? (
+                  <Badge variant="outline" className="w-full justify-center border-emerald-500/30 text-emerald-300">
+                    @{currentUser.rumuz}
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="w-full justify-center border-amber-500/30 text-amber-300">
+                    Giris gerekli
+                  </Badge>
+                )}
+              </CardContent>
+            </Card>
 
-        <section className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-          <Card className="border-slate-800 bg-slate-900/70 lg:col-span-8">
+            <Card className="border-slate-800 bg-slate-900/70">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Hizli Promptlar</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-auto w-full justify-start border-slate-700 bg-slate-950 py-2 text-left text-xs"
+                  onClick={() => void sendMessage('BTC genel durumunu ozetler misin?')}
+                  disabled={chatLoading}
+                >
+                  BTC genel durum
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-auto w-full justify-start border-slate-700 bg-slate-950 py-2 text-left text-xs"
+                  onClick={() => void sendMessage('ETH ve SOL karsilastir')}
+                  disabled={chatLoading}
+                >
+                  ETH vs SOL
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-auto w-full justify-start border-slate-700 bg-slate-950 py-2 text-left text-xs"
+                  onClick={() => void sendMessage('Yuksek riskli coinleri listele')}
+                  disabled={chatLoading}
+                >
+                  Yuksek riskli coinler
+                </Button>
+              </CardContent>
+            </Card>
+          </aside>
+
+          <section className="space-y-4">
+            <div className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-900/70 px-4 py-3">
+              <div>
+                <h1 className="text-2xl font-bold">AI Kripto Asistani</h1>
+                <p className="text-sm text-slate-300">
+                  Soru-cevap, TXT analizi ve grafik gorsel yorumu tek ekranda.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                className="border-slate-700 bg-slate-900 hover:bg-slate-800"
+                onClick={() => setToolSelectorOpen((prev) => !prev)}
+              >
+                Arac Secimi ({enabledTools.length})
+              </Button>
+            </div>
+
+            <div className="grid grid-cols-[minmax(0,1fr)_360px] gap-4">
+          <Card className="border-slate-800 bg-slate-900/70">
             <CardHeader>
               <CardTitle>Asistan Sohbeti</CardTitle>
               <CardDescription>Mesaj gonder, onerilen sorulara tikla, gerekirse onay isteyen islemleri yonet.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="h-[540px] overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+              <div className="h-[68vh] overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/60 p-3">
                 {chatMessages.length === 0 ? (
                   <div className="flex h-full items-center justify-center text-sm text-slate-400">
-                    Ornek: "THYAO icin 3 aylik teknik analiz yap" veya "portfoyumu analiz et".
+                    Ornek: "BTC icin detayli analiz yap" veya "ETH ve SOL karsilastir".
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -559,7 +614,7 @@ export default function AssistantPage() {
                       className="border-slate-700 bg-slate-900 hover:bg-slate-800"
                       onClick={() => setToolSelectorOpen((prev) => !prev)}
                     >
-                      Arac Secimi ({enabledTools.length})
+                      Arac Secimi
                     </Button>
                   </div>
 
@@ -576,7 +631,7 @@ export default function AssistantPage() {
             </CardContent>
           </Card>
 
-          <Card className="border-slate-800 bg-slate-900/70 lg:col-span-4">
+          <Card className="border-slate-800 bg-slate-900/70">
             <CardHeader>
               <CardTitle>Arac Kategorileri</CardTitle>
               <CardDescription>Aktif kategoriler `/api/agent` icin enabledTools listesine gonderilir.</CardDescription>
@@ -613,7 +668,10 @@ export default function AssistantPage() {
               </div>
             </CardContent>
           </Card>
-        </section>
+            </div>
+          </section>
+        </div>
+      </div>
       </div>
     </main>
   );
