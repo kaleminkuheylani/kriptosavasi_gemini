@@ -27,8 +27,8 @@ Bu proje yatirim tavsiyesi vermez; tum icerikler finansal okuryazarlik amaciyla 
 - 7 gunluk oturum
 
 ### Veri Kaynaklari
-- Asenax API (canli hisse verileri)
-- Twelve Data API (BIST + Digital Currency + Forex + NASDAQ)
+- NosyAPI (BIST canli/gecikmeli hisse verileri, birincil kaynak)
+- Twelve Data API (Digital Currency + Forex + NASDAQ global market verileri)
 - Finance API (gecmis veriler)
 - Groq API (LLM)
 - z-ai-web-dev-sdk (VLM, web arama)
@@ -114,6 +114,7 @@ prisma/
 ```
 DATABASE_URL="file:./db/custom.db"
 GROQ_API_KEY="your-groq-api-key"
+NOSYAPI_API_KEY="your-nosyapi-api-key"
 TWELVE_DATA_API_KEY="your-twelve-data-api-key"
 ```
 

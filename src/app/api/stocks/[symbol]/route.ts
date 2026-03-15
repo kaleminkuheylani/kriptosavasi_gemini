@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { fetchBistStocks } from '@/lib/bist-stocks';
 
 // In-memory cache for stock detail + historical data
 const symbolCache: Record<string, { data: unknown; timestamp: number }> = {};
@@ -24,13 +25,6 @@ interface HistoricalData {
   low: number;
   close: number;
   volume: number;
-}
-
-function parseNumber(value: string | number | undefined): number {
-  if (value === undefined || value === null) return 0;
-  if (typeof value === 'number') return value;
-  const parsed = parseFloat(value.replace(',', '.').replace(/\s/g, ''));
-  return isNaN(parsed) ? 0 : parsed;
 }
 
 // Time range mapping
@@ -162,34 +156,22 @@ export async function GET(
       return NextResponse.json({ ...cached.data, source: 'cache' });
     }
 
-    // Fetch stock detail from Asenax
-    const detailResponse = await fetch(`https://api.asenax.com/bist/get/${code}`, {
-      headers: {
-        'Accept': 'application/json',
-      },
-    });
-
-    let stockDetail: StockDetail | null = null;
-
-    if (detailResponse.ok) {
-      const detailData = await detailResponse.json();
-
-      if (detailData.code === "0" && detailData.data?.hisseYuzeysel) {
-        const d = detailData.data.hisseYuzeysel;
-        stockDetail = {
-          code: d.sembol || code,
-          name: d.aciklama || '',
-          price: d.kapanis || d.satis || 0,
-          change: d.net || 0,
-          changePercent: d.yuzdedegisim || 0,
-          volume: d.hacimlot || 0,
-          high: d.yuksek || 0,
-          low: d.dusuk || 0,
-          open: d.acilis || 0,
-          previousClose: d.dunkukapanis || d.oncekikapanis || 0,
-        };
-      }
-    }
+    const stocks = await fetchBistStocks();
+    const current = stocks.find(stock => stock.code === code);
+    const stockDetail: StockDetail | null = current
+      ? {
+          code: current.code,
+          name: current.name,
+          price: current.price,
+          change: current.change,
+          changePercent: current.changePercent,
+          volume: current.volume,
+          high: current.high,
+          low: current.low,
+          open: current.open,
+          previousClose: current.previousClose,
+        }
+      : null;
 
     // Try to fetch historical data from Finance API
     let historicalData = await fetchHistoricalFromFinanceAPI(code, rangeSeconds);

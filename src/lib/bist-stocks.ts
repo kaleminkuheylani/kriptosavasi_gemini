@@ -12,6 +12,12 @@ export interface StockData {
   sector?: string;
 }
 
+const envStockLimit = Number.parseInt(process.env.BIST_STOCK_LIMIT ?? '', 10);
+export const BIST_STOCK_LIMIT =
+  Number.isFinite(envStockLimit) && envStockLimit > 0
+    ? envStockLimit
+    : Number.MAX_SAFE_INTEGER;
+
 // ─── Sektör haritası ────────────────────────────────────────────────────────
 export const STOCK_SECTORS: Record<string, string> = {
   GARAN: 'Bankacılık', AKBNK: 'Bankacılık', ISCTR: 'Bankacılık',
@@ -145,40 +151,154 @@ let cachedStocks: StockData[] = [];
 let lastFetchTime = 0;
 const CACHE_DURATION = 60 * 1000; // 60 saniye
 
-// ─── Twelve Data batch fetch ─────────────────────────────────────────────────
-async function fetchFromTwelveData(): Promise<StockData[]> {
-  const apiKey = process.env.TWELVE_DATA_API_KEY;
-  if (!apiKey) throw new Error('TWELVE_DATA_API_KEY eksik');
+const NOSYAPI_BASE_URL = process.env.NOSYAPI_BASE_URL ?? 'https://www.nosyapi.com/apiv2/service';
 
-  // Twelve Data: BIST sembolleri :XIST son ekiyle gönderilir
-  const symbolList = FALLBACK_STOCKS.map(s => `${s.code}:XIST`).join(',');
-  const url = `https://api.twelvedata.com/quote?symbol=${symbolList}&apikey=${apiKey}`;
+function normalizeCode(value: unknown): string {
+  return String(value ?? '').trim().toUpperCase();
+}
 
-  const res = await fetch(url, { next: { revalidate: 60 } });
-  if (!res.ok) throw new Error(`Twelve Data HTTP ${res.status}`);
+function parseMaybeNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const parsed = Number.parseFloat(String(value).replace(',', '.'));
+  return Number.isFinite(parsed) ? parsed : null;
+}
 
-  const json = await res.json();
+type GenericRecord = Record<string, unknown>;
 
-  // Tek sembol → obje, çoklu → { SYMBOL: obje, ... }
-  const quotes: Record<string, Record<string, string>> =
-    FALLBACK_STOCKS.length === 1 ? { [FALLBACK_STOCKS[0].code]: json } : json;
+function pickString(source: GenericRecord, keys: string[]): string {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
 
-  const merged = FALLBACK_STOCKS.map(fallback => {
-    const q = quotes[fallback.code];
-    if (!q || q.status === 'error' || !q.close) return fallback;
+function pickNumber(source: GenericRecord, keys: string[]): number | null {
+  for (const key of keys) {
+    const parsed = parseMaybeNumber(source[key]);
+    if (parsed !== null) return parsed;
+  }
+  return null;
+}
 
-    const price         = parseFloat(q.close)          || fallback.price;
-    const change        = parseFloat(q.change)         || fallback.change;
-    const changePercent = parseFloat(q.percent_change) || fallback.changePercent;
-    const volume        = parseInt(q.volume ?? '0')    || fallback.volume;
-    const high          = parseFloat(q.high)           || fallback.high;
-    const low           = parseFloat(q.low)            || fallback.low;
-    const open          = parseFloat(q.open)           || fallback.open;
-    const previousClose = parseFloat(q.previous_close) || fallback.previousClose;
+async function fetchFromNosyApi(): Promise<StockData[]> {
+  const apiKey = process.env.NOSYAPI_API_KEY;
+  if (!apiKey) throw new Error('NOSYAPI_API_KEY eksik');
 
-    return { ...fallback, price, change, changePercent, volume, high, low, open, previousClose };
-  });
+  const headers = {
+    Accept: 'application/json',
+    'X-NSYP': apiKey,
+  };
 
+  const [listRes, quoteRes] = await Promise.all([
+    fetch(`${NOSYAPI_BASE_URL}/economy/bist/list`, { headers, next: { revalidate: 60 } }),
+    fetch(`${NOSYAPI_BASE_URL}/economy/bist/exchange-rate`, { headers, next: { revalidate: 60 } }),
+  ]);
+
+  if (!listRes.ok) throw new Error(`NosyAPI list HTTP ${listRes.status}`);
+  if (!quoteRes.ok) throw new Error(`NosyAPI quote HTTP ${quoteRes.status}`);
+
+  const listJson = (await listRes.json()) as { data?: unknown[] };
+  const quoteJson = (await quoteRes.json()) as { data?: unknown[] };
+  const listData = Array.isArray(listJson.data) ? listJson.data : [];
+  const quoteData = Array.isArray(quoteJson.data) ? quoteJson.data : [];
+
+  if (quoteData.length === 0) {
+    throw new Error('NosyAPI gecerli fiyat verisi donmedi');
+  }
+
+  const fallbackMap = new Map(FALLBACK_STOCKS.map(stock => [stock.code, stock]));
+  const listMap = new Map<string, { code: string; name: string }>();
+  const quoteMap = new Map<string, StockData>();
+
+  for (const row of listData) {
+    if (!row || typeof row !== 'object') continue;
+    const item = row as GenericRecord;
+    const code = normalizeCode(pickString(item, ['kod', 'code', 'symbol', 'sembol']));
+    if (!code) continue;
+    const name = pickString(item, ['ad', 'name', 'isim', 'title']) || fallbackMap.get(code)?.name || code;
+    listMap.set(code, { code, name });
+  }
+
+  for (const row of quoteData) {
+    if (!row || typeof row !== 'object') continue;
+    const item = row as GenericRecord;
+    const code = normalizeCode(pickString(item, ['kod', 'code', 'symbol', 'sembol']));
+    if (!code) continue;
+
+    const fallback = fallbackMap.get(code);
+    const price = pickNumber(item, ['satis', 'fiyat', 'price', 'close', 'kapanis']) ?? fallback?.price ?? 0;
+    const previousClose =
+      pickNumber(item, ['oncekiKapanis', 'onceki_kapanis', 'previousClose', 'previous_close', 'dunkukapanis']) ??
+      fallback?.previousClose ??
+      price;
+    const change = pickNumber(item, ['net', 'change', 'degisim']) ?? (price - previousClose);
+    const changePercent =
+      pickNumber(item, ['yuzdedegisim', 'yuzdeDegisim', 'percent_change', 'changePercent']) ??
+      (previousClose !== 0 ? (change / previousClose) * 100 : 0);
+
+    quoteMap.set(code, {
+      code,
+      name:
+        pickString(item, ['ad', 'name', 'aciklama', 'isim']) ||
+        listMap.get(code)?.name ||
+        fallback?.name ||
+        code,
+      price,
+      change,
+      changePercent,
+      volume: pickNumber(item, ['hacimlot', 'hacim', 'volume']) ?? fallback?.volume ?? 0,
+      high: pickNumber(item, ['yuksek', 'high']) ?? fallback?.high ?? price,
+      low: pickNumber(item, ['dusuk', 'low']) ?? fallback?.low ?? price,
+      open: pickNumber(item, ['acilis', 'open']) ?? fallback?.open ?? previousClose,
+      previousClose,
+      sector: fallback?.sector,
+    });
+  }
+
+  const symbols = new Set<string>([
+    ...listMap.keys(),
+    ...quoteMap.keys(),
+  ]);
+
+  const merged = [...symbols]
+    .map((code) => {
+      const live = quoteMap.get(code);
+      const listed = listMap.get(code);
+      const fallback = fallbackMap.get(code);
+
+      if (live) {
+        return {
+          ...live,
+          name: live.name || listed?.name || fallback?.name || code,
+        };
+      }
+
+      if (fallback) {
+        return {
+          ...fallback,
+          name: listed?.name || fallback.name,
+        };
+      }
+
+      return {
+        code,
+        name: listed?.name || code,
+        price: 0,
+        change: 0,
+        changePercent: 0,
+        volume: 0,
+        high: 0,
+        low: 0,
+        open: 0,
+        previousClose: 0,
+      } as StockData;
+    })
+    .filter(stock => stock.code)
+    .slice(0, BIST_STOCK_LIMIT);
+
+  if (merged.length === 0) throw new Error('NosyAPI birlestirilmis veri olusturamadi');
   return merged;
 }
 
@@ -191,14 +311,14 @@ export async function fetchBistStocks(): Promise<StockData[]> {
   }
 
   try {
-    const stocks = await fetchFromTwelveData();
+    const stocks = await fetchFromNosyApi();
     cachedStocks = stocks;
     lastFetchTime = now;
     return stocks;
-  } catch (err) {
-    console.warn('Twelve Data fetch başarısız, fallback kullanılıyor:', err);
+  } catch (nosyErr) {
+    console.warn('NosyAPI fetch başarısız, fallback kullanılıyor:', nosyErr);
     if (cachedStocks.length === 0) {
-      cachedStocks = FALLBACK_STOCKS;
+      cachedStocks = FALLBACK_STOCKS.slice(0, BIST_STOCK_LIMIT);
       lastFetchTime = now;
     }
     return cachedStocks;
