@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import ZAI from 'z-ai-web-dev-sdk';
 import { cookies } from 'next/headers';
 import { serverClient } from '@/lib/supabase';
-import { fetchBistStocks } from '@/lib/bist-stocks';
+import { BIST_STOCK_LIMIT, fetchBistStocks } from '@/lib/bist-stocks';
 
 // ─── Supabase client helper (uses user's session JWT for RLS) ────────────────
 async function getAgentSupabaseClient() {
@@ -724,7 +724,7 @@ async function scanMarket(industry?: string) {
 
   try {
     const stocks = await fetchBistStocks();
-    const normalized = stocks.slice(0, 200).map(stock => ({
+    const normalized = stocks.slice(0, BIST_STOCK_LIMIT).map(stock => ({
       code: stock.code,
       name: stock.name,
       price: stock.price,

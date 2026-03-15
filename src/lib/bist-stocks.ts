@@ -12,7 +12,11 @@ export interface StockData {
   sector?: string;
 }
 
-export const BIST_STOCK_LIMIT = 200;
+const envStockLimit = Number.parseInt(process.env.BIST_STOCK_LIMIT ?? '', 10);
+export const BIST_STOCK_LIMIT =
+  Number.isFinite(envStockLimit) && envStockLimit > 0
+    ? envStockLimit
+    : Number.MAX_SAFE_INTEGER;
 
 // ─── Sektör haritası ────────────────────────────────────────────────────────
 export const STOCK_SECTORS: Record<string, string> = {
