@@ -323,9 +323,27 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error('/api/agent error:', error);
+    const message = error instanceof Error ? error.message : 'Bilinmeyen hata';
+    const normalized = message.toLowerCase();
+    const missingKey =
+      normalized.includes('api key eksik') ||
+      normalized.includes('coinmarketcap_api_key') ||
+      normalized.includes('cmc_api_key');
+    const rateLimited = normalized.includes('http 429');
+
     return NextResponse.json(
-      { success: false, error: 'Kripto asistani gecici olarak cevap veremiyor. Lutfen tekrar deneyin.' },
-      { status: 500 },
+      {
+        success: false,
+        error: missingKey
+          ? 'CoinMarketCap API anahtari tanimli degil. Asistan veri olmadan analiz uretemiyor.'
+          : rateLimited
+            ? 'CoinMarketCap istek limiti gecici olarak dolu. Biraz sonra tekrar deneyin.'
+            : 'Kripto asistani gecici olarak cevap veremiyor. Lutfen tekrar deneyin.',
+        hint: missingKey
+          ? 'COINMARKETCAP_API_KEY veya CMC_API_KEY ortam degiskenini tanimlayin.'
+          : undefined,
+      },
+      { status: missingKey ? 503 : rateLimited ? 429 : 500 },
     );
   }
 }
