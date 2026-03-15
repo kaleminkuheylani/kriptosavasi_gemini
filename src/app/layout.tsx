@@ -3,23 +3,23 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 
 export const metadata: Metadata = {
-  title: "BIST 100 Egitim Platformu - Canli Hisse Verileri ve Teknik Gosterge Egitimi",
+  title: "Kripto Analiz Platformu - CoinMarketCap Canli Piyasa ve Teknik Skorlar",
   description:
-    "Borsa Istanbul hisse senetleri icin canli fiyatlar, grafikler ve teknik gosterge odakli egitim icerikleri. Bu platform yatirim tavsiyesi sunmaz.",
-  keywords: ["BIST", "BIST 100", "Borsa Istanbul", "hisse senedi", "borsa", "teknik analiz egitimi", "finansal okuryazarlik"],
-  authors: [{ name: "BIST 100 Analiz" }],
+    "CoinMarketCap tabanli canli kripto para verileri, momentum-volatilite-likidite skorlari ve detayli piyasa analiz araclari.",
+  keywords: ["kripto", "bitcoin", "ethereum", "coinmarketcap", "teknik analiz", "crypto dashboard", "piyasa analiz"],
+  authors: [{ name: "Kripto Analiz" }],
   icons: {
     icon: "/logo.svg",
   },
   openGraph: {
-    title: "BIST 100 Egitim Platformu",
-    description: "Canli hisse takibi ve teknik gosterge odakli egitimsel analiz",
+    title: "Kripto Analiz Platformu",
+    description: "CoinMarketCap destekli canli kripto takibi ve detayli analiz araclari",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "BIST 100 Egitim Platformu",
-    description: "Canli hisse takibi ve teknik gosterge odakli egitimsel analiz",
+    title: "Kripto Analiz Platformu",
+    description: "CoinMarketCap destekli canli kripto takibi ve detayli analiz araclari",
   },
   verification: {
     google: "-xkmQLvLRKoxTr5aOPLjjtb-Amy7Tt8OksxuZaJpu8k",
