@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { serverClient } from '@/lib/supabase';
+import { getSupabaseConfigIssue, serverClient } from '@/lib/supabase';
 
 async function getSupabaseClient() {
   const cs = await cookies();
@@ -40,9 +40,22 @@ function isUniqueViolation(error: unknown): boolean {
   return typeof error === 'object' && error !== null && (error as { code?: string }).code === '23505';
 }
 
+function mapFetchFailedError(error: unknown): string | null {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error ?? '').toLowerCase();
+  if (message.includes('fetch failed') || message.includes('failed to fetch') || message.includes('network')) {
+    return 'Supabase bağlantısı kurulamadı. Lütfen ortam değişkenlerini ve ağ bağlantısını kontrol edin.';
+  }
+  return null;
+}
+
 // GET – Fetch watchlist
 export async function GET() {
   try {
+    const configIssue = getSupabaseConfigIssue();
+    if (configIssue) {
+      return NextResponse.json({ success: false, error: configIssue, data: [] }, { status: 503 });
+    }
+
     const sb = await getSupabaseClient();
     const { data: { user } } = await sb.auth.getUser();
     if (!user) return NextResponse.json({ success: true, data: [] });
@@ -65,6 +78,10 @@ export async function GET() {
     return NextResponse.json({ success: true, data: (data ?? []).map(mapWatchlistItem) });
   } catch (error) {
     console.error('Watchlist fetch error:', error);
+    const mapped = mapFetchFailedError(error);
+    if (mapped) {
+      return NextResponse.json({ success: false, error: mapped, data: [] }, { status: 503 });
+    }
     return NextResponse.json({ success: false, error: 'Takip listesi alınamadı', data: [] }, { status: 500 });
   }
 }
@@ -72,6 +89,11 @@ export async function GET() {
 // POST – Add to watchlist
 export async function POST(request: NextRequest) {
   try {
+    const configIssue = getSupabaseConfigIssue();
+    if (configIssue) {
+      return NextResponse.json({ success: false, error: configIssue }, { status: 503 });
+    }
+
     const sb = await getSupabaseClient();
     const { data: { user } } = await sb.auth.getUser();
     if (!user) return NextResponse.json({ success: false, error: 'Giriş yapmanız gerekli' }, { status: 401 });
@@ -148,6 +170,10 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error('Watchlist add error:', error);
+    const mapped = mapFetchFailedError(error);
+    if (mapped) {
+      return NextResponse.json({ success: false, error: mapped }, { status: 503 });
+    }
     return NextResponse.json({ success: false, error: 'Takip listesine eklenemedi' }, { status: 500 });
   }
 }
@@ -155,6 +181,11 @@ export async function POST(request: NextRequest) {
 // DELETE – Remove from watchlist
 export async function DELETE(request: NextRequest) {
   try {
+    const configIssue = getSupabaseConfigIssue();
+    if (configIssue) {
+      return NextResponse.json({ success: false, error: configIssue }, { status: 503 });
+    }
+
     const sb = await getSupabaseClient();
     const { data: { user } } = await sb.auth.getUser();
     if (!user) return NextResponse.json({ success: false, error: 'Giriş yapmanız gerekli' }, { status: 401 });
@@ -195,6 +226,10 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ success: true, message: 'Takip listesinden kaldırıldı' });
   } catch (error) {
     console.error('Watchlist remove error:', error);
+    const mapped = mapFetchFailedError(error);
+    if (mapped) {
+      return NextResponse.json({ success: false, error: mapped }, { status: 503 });
+    }
     return NextResponse.json({ success: false, error: 'Takip listesinden kaldırılamadı' }, { status: 500 });
   }
 }
@@ -202,6 +237,11 @@ export async function DELETE(request: NextRequest) {
 // PUT – Update target price
 export async function PUT(request: NextRequest) {
   try {
+    const configIssue = getSupabaseConfigIssue();
+    if (configIssue) {
+      return NextResponse.json({ success: false, error: configIssue }, { status: 503 });
+    }
+
     const sb = await getSupabaseClient();
     const { data: { user } } = await sb.auth.getUser();
     if (!user) return NextResponse.json({ success: false, error: 'Giriş yapmanız gerekli' }, { status: 401 });
@@ -245,6 +285,10 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ success: true, data: mapWatchlistItem(data), message: 'Güncellendi' });
   } catch (error) {
     console.error('Watchlist update error:', error);
+    const mapped = mapFetchFailedError(error);
+    if (mapped) {
+      return NextResponse.json({ success: false, error: mapped }, { status: 503 });
+    }
     return NextResponse.json({ success: false, error: 'Güncellenemedi' }, { status: 500 });
   }
 }
