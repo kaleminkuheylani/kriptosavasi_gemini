@@ -280,6 +280,9 @@ export default function Home() {
   const [emailInput, setEmailInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
+  const [needsVerification, setNeedsVerification] = useState(false);
+  const [resendLoading, setResendLoading] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
 
   // Fetch current user
   const fetchCurrentUser = useCallback(async () => {
@@ -417,6 +420,15 @@ export default function Home() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
 
+  // Countdown for verification code resend button
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const timer = setInterval(() => {
+      setResendCooldown(prev => (prev <= 1 ? 0 : prev - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [resendCooldown]);
+
   const isInWatchlist = (symbol: string) => watchlist.some(item => item.symbol === symbol);
 
   const addToWatchlist = async (stock: Stock) => {
@@ -473,8 +485,23 @@ export default function Home() {
       .flatMap(c => c.tools);
   };
 
+  const promptAuthForChatbot = (description?: string) => {
+    setAuthMode('register');
+    setAuthOpen(true);
+    setPasswordInput('');
+    toast({
+      title: 'Giris gerekli',
+      description: description ?? 'Chatbotu kullanmak için önce kayıt olup giriş yapmalısınız.',
+      variant: 'destructive',
+    });
+  };
+
   // Educational assistant chat
   const sendToAgent = async () => {
+    if (!currentUser) {
+      promptAuthForChatbot();
+      return;
+    }
     if (!chatInput.trim() || chatLoading) return;
 
     const userMessage = chatInput.trim();
@@ -494,6 +521,10 @@ export default function Home() {
       });
       
       const data = await response.json();
+      if (!response.ok && data?.requiresAuth) {
+        promptAuthForChatbot(data.error);
+        return;
+      }
       
       if (data.success) {
         const threadMessages: string[] = data.messages && data.messages.length > 0
@@ -548,7 +579,7 @@ export default function Home() {
       } else {
         setChatMessages(prev => [...prev, {
           role: 'assistant',
-          content: 'Bir hata oluştu. Lütfen tekrar deneyin.',
+          content: data.error || 'Bir hata oluştu. Lütfen tekrar deneyin.',
           timestamp: new Date(),
         }]);
       }
@@ -565,6 +596,10 @@ export default function Home() {
 
   // Confirm pending actions
   const confirmPendingActions = async (actions: PendingAction[], msgIdx: number) => {
+    if (!currentUser) {
+      promptAuthForChatbot();
+      return;
+    }
     // Disable pending on the message
     setChatMessages(prev => prev.map((m, i) =>
       i === msgIdx ? { ...m, pendingActions: undefined } : m
@@ -583,10 +618,14 @@ export default function Home() {
         body: JSON.stringify({ confirmActions: actions }),
       });
       const data = await response.json();
+      if (!response.ok && data?.requiresAuth) {
+        promptAuthForChatbot(data.error);
+        return;
+      }
 
       setChatMessages(prev => [...prev, {
         role: 'assistant',
-        content: data.success ? data.response : 'İşlem sırasında hata oluştu.',
+        content: data.success ? data.response : (data.error || 'İşlem sırasında hata oluştu.'),
         toolsUsed: data.toolsUsed,
         timestamp: new Date(),
       }]);
@@ -624,6 +663,12 @@ export default function Home() {
 
   // TXT File Upload Handler
   const handleTxtUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!currentUser) {
+      promptAuthForChatbot();
+      if (txtInputRef.current) txtInputRef.current.value = '';
+      return;
+    }
+
     const file = e.target.files?.[0];
     if (!file) return;
     
@@ -651,6 +696,10 @@ export default function Home() {
       });
       
       const data = await response.json();
+      if (!response.ok && data?.requiresAuth) {
+        promptAuthForChatbot(data.error);
+        return;
+      }
       
       if (data.success) {
         setChatMessages(prev => [...prev, {
@@ -681,6 +730,12 @@ export default function Home() {
 
   // Image Upload Handler
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, symbol?: string) => {
+    if (!currentUser) {
+      promptAuthForChatbot();
+      if (imageInputRef.current) imageInputRef.current.value = '';
+      return;
+    }
+
     const file = e.target.files?.[0];
     if (!file) return;
     
@@ -711,6 +766,12 @@ export default function Home() {
         });
         
         const data = await response.json();
+        if (!response.ok && data?.requiresAuth) {
+          promptAuthForChatbot(data.error);
+          setChatLoading(false);
+          if (imageInputRef.current) imageInputRef.current.value = '';
+          return;
+        }
         
         if (data.success) {
           setChatMessages(prev => [...prev, {
@@ -744,6 +805,10 @@ export default function Home() {
 
   // Analyze current chart
   const analyzeCurrentChart = async () => {
+    if (!currentUser) {
+      promptAuthForChatbot();
+      return;
+    }
     if (!selectedStock || !historicalData.length) return;
     
     setChartAnalyzing(true);
@@ -782,6 +847,10 @@ export default function Home() {
       });
       
       const data = await response.json();
+      if (!response.ok && data?.requiresAuth) {
+        promptAuthForChatbot(data.error);
+        return;
+      }
       
       if (data.success) {
         setChatMessages(prev => [...prev, {
@@ -823,15 +892,19 @@ export default function Home() {
       });
 
       const data = await response.json();
+      if (typeof data.retryAfterSeconds === 'number' && data.retryAfterSeconds > 0) {
+        setResendCooldown(prev => Math.max(prev, data.retryAfterSeconds));
+      }
 
       if (data.success) {
         if (data.requiresConfirmation) {
+          setNeedsVerification(true);
+          setAuthMode('login');
           toast({ title: 'E-posta doğrulaması gerekli', description: data.message });
-          setAuthOpen(false);
-          setEmailInput('');
           setPasswordInput('');
           return;
         }
+        setNeedsVerification(false);
         setCurrentUser(data.user);
         setAuthOpen(false);
         setEmailInput('');
@@ -848,6 +921,11 @@ export default function Home() {
           description: data.error,
           variant: 'destructive'
         });
+        if (data.requiresConfirmation) {
+          setNeedsVerification(true);
+          setAuthMode('login');
+          setPasswordInput('');
+        }
       }
     } catch {
       toast({
@@ -857,6 +935,55 @@ export default function Home() {
       });
     } finally {
       setAuthLoading(false);
+    }
+  };
+
+  const handleResendVerification = async () => {
+    const email = emailInput.trim();
+    if (!email) {
+      toast({
+        title: 'E-posta gerekli',
+        description: 'Kod göndermek için e-posta adresi girin',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setResendLoading(true);
+    try {
+      const response = await fetch('/api/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          action: 'resend_verification',
+        }),
+      });
+      const data = await response.json();
+      if (typeof data.retryAfterSeconds === 'number' && data.retryAfterSeconds > 0) {
+        setResendCooldown(prev => Math.max(prev, data.retryAfterSeconds));
+      } else {
+        setResendCooldown(prev => Math.max(prev, 45));
+      }
+
+      if (data.success) {
+        setNeedsVerification(true);
+        toast({ title: 'Kod gönderildi', description: data.message ?? 'Doğrulama kodu tekrar gönderildi' });
+      } else {
+        toast({
+          title: 'Hata',
+          description: data.error ?? 'Doğrulama kodu gönderilemedi',
+          variant: 'destructive',
+        });
+      }
+    } catch {
+      toast({
+        title: 'Hata',
+        description: 'Bağlantı hatası',
+        variant: 'destructive',
+      });
+    } finally {
+      setResendLoading(false);
     }
   };
 
@@ -2307,7 +2434,7 @@ export default function Home() {
           {/* Chat Input */}
           <div className="flex gap-2 pt-4 border-t border-slate-800">
             <Input
-              placeholder="Mesajinizi yazin..."
+              placeholder={currentUser ? 'Mesajinizi yazin...' : 'Chatbotu kullanmak icin giris yapin'}
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
               onKeyDown={(e) => {
@@ -2316,11 +2443,12 @@ export default function Home() {
                   sendToAgent();
                 }
               }}
+              disabled={!currentUser}
               className="bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 focus-visible:ring-emerald-500"
             />
             <Button
               onClick={sendToAgent}
-              disabled={chatLoading || !chatInput.trim()}
+              disabled={!currentUser || chatLoading || !chatInput.trim()}
               className="bg-emerald-600 hover:bg-emerald-700"
             >
               <Send className="h-4 w-4" />
@@ -2330,7 +2458,16 @@ export default function Home() {
       </Dialog>
 
       {/* Auth Modal */}
-      <Dialog open={authOpen} onOpenChange={setAuthOpen}>
+      <Dialog
+        open={authOpen}
+        onOpenChange={(open) => {
+          setAuthOpen(open);
+          if (!open) {
+            setNeedsVerification(false);
+            setResendCooldown(0);
+          }
+        }}
+      >
         <DialogContent className="max-w-md bg-slate-900 border-slate-800 text-white">
           <DialogHeader>
             <div className="flex items-center gap-3 mb-4">
@@ -2382,9 +2519,38 @@ export default function Home() {
               {authMode === 'login' ? 'Giris Yap' : 'Kayit Ol'}
             </Button>
 
+            {(needsVerification || authMode === 'login') && (
+              <div className="space-y-2">
+                {needsVerification && (
+                  <p className="text-xs text-amber-300">
+                    E-posta doğrulaması bekleniyor. Kod gelmediyse yeniden gönderebilirsiniz.
+                  </p>
+                )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleResendVerification}
+                  disabled={!emailInput.trim() || resendLoading || authLoading || resendCooldown > 0}
+                  className="w-full border-slate-700 bg-slate-800/70 hover:bg-slate-700 text-slate-200"
+                >
+                  {resendLoading ? (
+                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                  ) : (
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                  )}
+                  {resendCooldown > 0
+                    ? `Yeniden gonder (${resendCooldown}s)`
+                    : 'Dogrulama kodunu yeniden gonder'}
+                </Button>
+              </div>
+            )}
+
             <div className="text-center">
               <button
-                onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}
+                onClick={() => {
+                  setAuthMode(authMode === 'login' ? 'register' : 'login');
+                  setNeedsVerification(false);
+                }}
                 className="text-sm text-slate-400 hover:text-white transition-colors"
               >
                 {authMode === 'login' ? 'Hesabiniz yok mu? Kayit olun' : 'Zaten hesabiniz var mi? Giris yapin'}

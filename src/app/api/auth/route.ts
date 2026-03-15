@@ -43,9 +43,68 @@ function mapSupabaseErrorMessage(message: string): string {
   return message;
 }
 
+async function resendSignupVerificationCode(email: string): Promise<void> {
+  const { error } = await supabase.auth.resend({
+    type: 'signup',
+    email,
+  });
+  if (error) throw error;
+}
+
 const COOKIE_ACCESS  = 'sb-access-token';
 const COOKIE_REFRESH = 'sb-refresh-token';
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 7; // 7 days
+
+const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
+const authRateStore = new Map<string, number[]>();
+
+function getClientIp(request: NextRequest): string {
+  const forwardedFor = request.headers.get('x-forwarded-for');
+  if (forwardedFor) {
+    return forwardedFor.split(',')[0].trim();
+  }
+  const realIp = request.headers.get('x-real-ip');
+  if (realIp) return realIp.trim();
+  return 'unknown';
+}
+
+function consumeRateLimit(key: string, limit: number, windowMs: number): { allowed: boolean; retryAfterSeconds: number } {
+  const now = Date.now();
+  const existing = authRateStore.get(key) ?? [];
+  const recent = existing.filter((ts) => now - ts < windowMs);
+
+  if (recent.length >= limit) {
+    const oldestTs = recent[0] ?? now;
+    const retryAfterSeconds = Math.max(1, Math.ceil((windowMs - (now - oldestTs)) / 1000));
+    authRateStore.set(key, recent);
+    return { allowed: false, retryAfterSeconds };
+  }
+
+  recent.push(now);
+  authRateStore.set(key, recent);
+  return { allowed: true, retryAfterSeconds: 0 };
+}
+
+function rateLimitJsonResponse(message: string, retryAfterSeconds: number) {
+  return NextResponse.json(
+    {
+      success: false,
+      error: message,
+      retryAfterSeconds,
+    },
+    {
+      status: 429,
+      headers: { 'Retry-After': String(retryAfterSeconds) },
+    }
+  );
+}
+
+function applyResendRateLimit(email: string, clientIp: string): { allowed: boolean; retryAfterSeconds: number } {
+  const byEmail = consumeRateLimit(`auth:resend:email:${email}`, 3, RATE_LIMIT_WINDOW_MS);
+  if (!byEmail.allowed) return byEmail;
+  const byIp = consumeRateLimit(`auth:resend:ip:${clientIp}`, 8, RATE_LIMIT_WINDOW_MS);
+  return byIp;
+}
 
 async function setSessionCookies(accessToken: string, refreshToken: string) {
   const cs = await cookies();
@@ -147,17 +206,51 @@ export async function POST(request: NextRequest) {
     const { email, password, action } = (body ?? {}) as {
       email?: string;
       password?: string;
-      action?: 'login' | 'register';
+      action?: 'login' | 'register' | 'resend_verification';
     };
 
-    if (action !== 'login' && action !== 'register') {
+    if (action !== 'login' && action !== 'register' && action !== 'resend_verification') {
       return NextResponse.json({ success: false, error: 'Geçersiz işlem türü' }, { status: 400 });
+    }
+
+    const clientIp = getClientIp(request);
+    const globalLimit = consumeRateLimit(`auth:global:${clientIp}`, 40, RATE_LIMIT_WINDOW_MS);
+    if (!globalLimit.allowed) {
+      return rateLimitJsonResponse(
+        'Çok fazla doğrulama isteği gönderdiniz. Lütfen biraz bekleyin.',
+        globalLimit.retryAfterSeconds
+      );
     }
 
     // Validation
     const normalizedEmailInput = String(email ?? '').trim();
     const emailErr = validateEmail(normalizedEmailInput);
     if (emailErr) return NextResponse.json({ success: false, error: emailErr }, { status: 400 });
+
+    const normalizedEmail = normalizedEmailInput.toLowerCase();
+
+    if (action === 'resend_verification') {
+      const resendLimit = applyResendRateLimit(normalizedEmail, clientIp);
+      if (!resendLimit.allowed) {
+        return rateLimitJsonResponse(
+          'Doğrulama kodu çok sık istendi. Lütfen biraz bekleyip tekrar deneyin.',
+          resendLimit.retryAfterSeconds
+        );
+      }
+      try {
+        await resendSignupVerificationCode(normalizedEmail);
+        return NextResponse.json({
+          success: true,
+          requiresConfirmation: true,
+          message: 'Doğrulama kodu e-posta adresinize gönderildi.',
+        });
+      } catch (resendError) {
+        const msg = resendError instanceof Error
+          ? mapSupabaseErrorMessage(resendError.message)
+          : 'Doğrulama kodu gönderilemedi';
+        return NextResponse.json({ success: false, error: msg }, { status: 400 });
+      }
+    }
 
     if (typeof password !== 'string' || password.length === 0) {
       return NextResponse.json({ success: false, error: 'Şifre gerekli' }, { status: 400 });
@@ -171,9 +264,15 @@ export async function POST(request: NextRequest) {
       if (passErr) return NextResponse.json({ success: false, error: passErr }, { status: 400 });
     }
 
-    const normalizedEmail = normalizedEmailInput.toLowerCase();
-
     if (action === 'register') {
+      const registerLimit = consumeRateLimit(`auth:register:email:${normalizedEmail}`, 5, RATE_LIMIT_WINDOW_MS);
+      if (!registerLimit.allowed) {
+        return rateLimitJsonResponse(
+          'Bu e-posta için çok fazla kayıt denemesi yapıldı. Lütfen biraz bekleyin.',
+          registerLimit.retryAfterSeconds
+        );
+      }
+
       const rumuz = buildRumuzFromEmail(normalizedEmail);
       const avatar = pickRandomAvatar();
 
@@ -211,7 +310,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({
           success: true,
           requiresConfirmation: true,
-          message: 'Kayıt başarılı! E-posta adresinize doğrulama linki gönderildi.',
+          message: 'Kayıt başarılı! E-posta adresinize doğrulama kodu gönderildi.',
         });
       }
 
@@ -234,12 +333,44 @@ export async function POST(request: NextRequest) {
     }
 
     // LOGIN
+    const loginLimit = consumeRateLimit(`auth:login:email:${normalizedEmail}`, 12, RATE_LIMIT_WINDOW_MS);
+    if (!loginLimit.allowed) {
+      return rateLimitJsonResponse(
+        'Çok fazla giriş denemesi yaptınız. Lütfen biraz bekleyip tekrar deneyin.',
+        loginLimit.retryAfterSeconds
+      );
+    }
+
     const { data, error } = await supabase.auth.signInWithPassword({
       email: normalizedEmail,
       password,
     });
 
     if (error) {
+      if (error.message.toLowerCase().includes('email not confirmed')) {
+        const resendLimit = applyResendRateLimit(normalizedEmail, clientIp);
+        if (!resendLimit.allowed) {
+          return rateLimitJsonResponse(
+            'Doğrulama kodu gönderim limiti doldu. Lütfen daha sonra tekrar deneyin.',
+            resendLimit.retryAfterSeconds
+          );
+        }
+
+        try {
+          await resendSignupVerificationCode(normalizedEmail);
+        } catch (resendErr) {
+          console.error('Auth resend verification error:', resendErr);
+        }
+        return NextResponse.json(
+          {
+            success: false,
+            requiresConfirmation: true,
+            error: 'E-posta adresiniz henüz doğrulanmamış. Doğrulama kodu e-posta adresinize tekrar gönderildi.',
+          },
+          { status: 403 }
+        );
+      }
+
       const msg = error.message.includes('Invalid login')
         ? 'E-posta veya şifre hatalı.'
         : mapSupabaseErrorMessage(error.message);

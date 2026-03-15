@@ -18,17 +18,16 @@ interface RpmEntry { requests: number[] }
 const rpmStore = new Map<string, RpmEntry>();
 
 const LIMITS = {
-  user:  { rpm: 15, dailyTokens: 60_000 },
-  guest: { rpm:  5, dailyTokens: 15_000 },
+  user: { rpm: 15, dailyTokens: 50_000 },
 };
 
 const LEGAL_DISCLAIMER =
   'Yasal Sorumluluk Notu: Bu içerik yalnızca bilgilendirme amaçlıdır. Verilecek tüm yatırım kararları ile doğabilecek hukuki ve mali sorumluluk tamamen kullanıcıya aittir.';
 
 /** Per-minute sliding window — checked synchronously, no DB needed */
-function checkRpm(userId: string | null): boolean {
-  const key = userId || 'guest';
-  const limits = userId ? LIMITS.user : LIMITS.guest;
+function checkRpm(userId: string): boolean {
+  const key = userId;
+  const limits = LIMITS.user;
   if (!rpmStore.has(key)) rpmStore.set(key, { requests: [] });
   const entry = rpmStore.get(key)!;
   const now = Date.now();
@@ -40,20 +39,14 @@ function checkRpm(userId: string | null): boolean {
 
 /**
  * Check + record daily usage in Supabase user_usage table.
- * Returns { throttled, maxTokens }.
- * Falls back to unthrottled on DB error so users aren't blocked by Supabase issues.
+ * Returns { throttled, maxTokens, remainingTokens }.
+ * Falls back to conservative limits on DB error.
  */
 async function checkAndRecordUsage(
-  userId: string | null,
+  userId: string,
   sb: ReturnType<typeof serverClient>,
-): Promise<{ throttled: boolean; maxTokens: number }> {
-  const limits = userId ? LIMITS.user : LIMITS.guest;
-
-  // Guests: no DB tracking, just RPM
-  if (!userId) {
-    return { throttled: false, maxTokens: 1500 };
-  }
-
+): Promise<{ throttled: boolean; maxTokens: number; remainingTokens: number }> {
+  const limits = LIMITS.user;
   try {
     const today = new Date().toISOString().slice(0, 10);
 
@@ -73,11 +66,16 @@ async function checkAndRecordUsage(
       { onConflict: 'user_id,date' }
     );
 
-    if (tokenCount >= limits.dailyTokens) return { throttled: true,  maxTokens: 0   };
-    if (requestCount >= limits.rpm * 10)  return { throttled: false, maxTokens: 400 }; // soft
-    return { throttled: false, maxTokens: 1500 };
+    const remainingTokens = Math.max(0, limits.dailyTokens - tokenCount);
+    if (remainingTokens <= 0) return { throttled: true, maxTokens: 0, remainingTokens: 0 };
+
+    // Per-response cap adapts to remaining budget + sustained high traffic.
+    const baseCap = Math.max(250, Math.min(1500, remainingTokens));
+    const adaptiveCap = requestCount >= limits.rpm * 10 ? Math.min(baseCap, 500) : baseCap;
+    return { throttled: false, maxTokens: adaptiveCap, remainingTokens };
   } catch {
-    return { throttled: false, maxTokens: 1500 }; // fail open
+    // Fail-open with conservative max tokens to avoid runaway usage.
+    return { throttled: false, maxTokens: 500, remainingTokens: 500 };
   }
 }
 
@@ -1782,15 +1780,62 @@ function sanitizeHistory(
   return merged;
 }
 
+type ToolParamsMap = Record<string, Record<string, unknown>>;
+interface ToolExecutionTask {
+  tool: string;
+  label: string;
+  params: Record<string, unknown>;
+}
+
+const TOOL_NAME_KEYS = Object.keys(TOOLS).sort((a, b) => b.length - a.length);
+
+function resolveToolBaseName(toolLabel: string): string {
+  const match = TOOL_NAME_KEYS.find(
+    (name) => toolLabel === name || toolLabel.startsWith(`${name}_`)
+  );
+  return match ?? toolLabel;
+}
+
+function buildExecutionTasks(tools: string[], params: ToolParamsMap): ToolExecutionTask[] {
+  const tasks: ToolExecutionTask[] = [];
+
+  for (const tool of tools) {
+    const matchedParams = Object.entries(params)
+      .filter(([key]) => key === tool || key.startsWith(`${tool}_`));
+
+    if (matchedParams.length === 0) {
+      tasks.push({ tool, label: tool, params: {} });
+      continue;
+    }
+
+    for (const [key, value] of matchedParams) {
+      const safeParams =
+        value && typeof value === 'object' && !Array.isArray(value)
+          ? (value as Record<string, unknown>)
+          : {};
+      tasks.push({ tool, label: key, params: safeParams });
+    }
+  }
+
+  // Stable de-dup by label
+  const seen = new Set<string>();
+  return tasks.filter((task) => {
+    if (seen.has(task.label)) return false;
+    seen.add(task.label);
+    return true;
+  });
+}
+
 // Builds a compact text representation of tool results for the final LLM
 // For web_search, uses the pre-generated summary instead of raw items to save tokens
 function buildToolResultsText(toolResults: Record<string, unknown>): string {
   const parts: string[] = [];
 
-  for (const [tool, result] of Object.entries(toolResults)) {
+  for (const [toolLabel, result] of Object.entries(toolResults)) {
+    const tool = resolveToolBaseName(toolLabel);
     const r = result as { success: boolean; data?: unknown; error?: string; _meta?: unknown };
     if (!r.success) {
-      parts.push(`### ${tool}\nHata: ${r.error}`);
+      parts.push(`### ${toolLabel}\nHata: ${r.error}`);
       continue;
     }
 
@@ -1799,7 +1844,7 @@ function buildToolResultsText(toolResults: Record<string, unknown>): string {
       if (d) {
         const queriesText = d.queries ? `Kullanılan Sorgular: ${d.queries.join(' | ')}` : '';
         const summaryText = d.summary || '';
-        parts.push(`### web_search\n${queriesText}\n\n${summaryText}`);
+        parts.push(`### ${toolLabel}\n${queriesText}\n\n${summaryText}`);
       }
     } else if (tool === 'get_stock_price') {
       const enhanced = result as {
@@ -1809,7 +1854,7 @@ function buildToolResultsText(toolResults: Record<string, unknown>): string {
         historical?: Record<string, unknown> | null;
         userStatus?: Record<string, unknown> | null;
       };
-      const lines: string[] = [`### get_stock_price (kaynak: ${enhanced.priceSource || 'api'})`];
+      const lines: string[] = [`### ${toolLabel} (kaynak: ${enhanced.priceSource || 'api'})`];
       if (enhanced.data) {
         lines.push('**Fiyat Verisi:**\n' + JSON.stringify(enhanced.data, null, 2).slice(0, 400));
       }
@@ -1833,7 +1878,7 @@ function buildToolResultsText(toolResults: Record<string, unknown>): string {
       }
       parts.push(lines.join('\n'));
     } else {
-      parts.push(`### ${tool}\n${JSON.stringify(r.data, null, 2).slice(0, 800)}`);
+      parts.push(`### ${toolLabel}\n${JSON.stringify(r.data, null, 2).slice(0, 800)}`);
     }
   }
 
@@ -1849,11 +1894,48 @@ function ensureThreadLegalDisclaimer(text: string): string {
   return `${text.trim()} ||| ⚖️ ${LEGAL_DISCLAIMER}`;
 }
 
+function buildBackupAgentResponse(
+  toolResults: Record<string, unknown>,
+  pendingActions: PendingAction[]
+): string {
+  const succeeded = Object.entries(toolResults)
+    .filter(([, value]) => (value as { success?: boolean })?.success)
+    .map(([tool]) => tool);
+  const failed = Object.entries(toolResults)
+    .filter(([, value]) => !(value as { success?: boolean })?.success)
+    .map(([tool]) => tool);
+
+  const parts = [
+    '⚠️ Yapay zeka yorum servisine şu an ulaşılamadı.',
+    succeeded.length > 0
+      ? `✅ Veri alınan araçlar: ${succeeded.join(', ')}`
+      : '✅ Mesajınız alındı, ancak yorum motoru geçici olarak yanıt veremiyor.',
+    failed.length > 0 ? `❌ Sorun yaşayan araçlar: ${failed.join(', ')}` : '',
+    pendingActions.length > 0
+      ? `⏳ Onay bekleyen işlemler: ${pendingActions.map(a => a.description).join(' | ')}`
+      : '',
+    '🔄 Birkaç dakika sonra tekrar denerseniz ayrıntılı analiz dönecektir.',
+    `⚖️ ${LEGAL_DISCLAIMER}`,
+  ].filter(Boolean);
+
+  return parts.join(' ||| ');
+}
+
 // AI Agent Handler
 export async function POST(request: NextRequest) {
   try {
     // Get current user
     const userId = await getCurrentUserId();
+    if (!userId) {
+      return NextResponse.json(
+        {
+          success: false,
+          requiresAuth: true,
+          error: 'Chatbot kullanmak için önce kayıt olup giriş yapmalısınız.',
+        },
+        { status: 401 }
+      );
+    }
     
     const body = await request.json();
     const {
@@ -1873,18 +1955,29 @@ export async function POST(request: NextRequest) {
 
     // ── Rate Limiting ─────────────────────────────────────────────────────
     const rpmThrottled = checkRpm(userId);
-    const sb = await getAgentSupabaseClient();
-    const { throttled, maxTokens: allowedTokens } = await checkAndRecordUsage(userId, sb);
-    if (throttled && !rpmThrottled) {
-      // Günlük bütçe tükendi — sessizce kısa yanıt ver
-      return NextResponse.json({
-        success: true,
-        response: '📊 Şu an yoğun kullanım var, biraz sonra tekrar dene.',
-        messages: ['📊 Şu an yoğun kullanım var, biraz sonra tekrar dene.'],
-        suggestedQuestions: [],
-        toolsUsed: [],
-        timestamp: new Date().toISOString(),
-      });
+    const { sb } = await getAgentSupabaseClient();
+    if (rpmThrottled) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Çok hızlı istek gönderiyorsunuz. Lütfen kısa bir süre bekleyin.',
+        },
+        { status: 429 }
+      );
+    }
+    const { throttled, maxTokens: allowedTokens, remainingTokens } = await checkAndRecordUsage(userId, sb);
+    if (throttled) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Günlük token limitiniz doldu. Lütfen yarın tekrar deneyin.',
+          usage: {
+            dailyTokenLimit: LIMITS.user.dailyTokens,
+            remainingTokens: 0,
+          },
+        },
+        { status: 429 }
+      );
     }
     // ─────────────────────────────────────────────────────────────────────
 
@@ -1959,34 +2052,32 @@ export async function POST(request: NextRequest) {
       ? rawTools.filter((t: string) => enabledTools.includes(t))
       : rawTools;
 
-    // Separate immediate tools from those requiring user confirmation
-    const immediateTools = tools.filter((t: string) => !CONFIRMATION_REQUIRED_TOOLS.includes(t));
-    const pendingActions: PendingAction[] = tools
-      .filter(t => CONFIRMATION_REQUIRED_TOOLS.includes(t))
-      .map(t => ({
-        tool: t,
-        params: params[t] || params[Object.keys(params).find(k => k.startsWith(t)) ?? ''] || {},
-        description: describePendingAction(
-          t,
-          params[t] || params[Object.keys(params).find(k => k.startsWith(t)) ?? ''] || {}
-        ),
+    // Build per-tool execution tasks (supports multi-symbol keys like get_stock_price_THYAO)
+    const executionTasks = buildExecutionTasks(tools, params as ToolParamsMap);
+    const immediateTasks = executionTasks.filter(task => !CONFIRMATION_REQUIRED_TOOLS.includes(task.tool));
+    const pendingActions: PendingAction[] = executionTasks
+      .filter(task => CONFIRMATION_REQUIRED_TOOLS.includes(task.tool))
+      .map(task => ({
+        tool: task.tool,
+        params: task.params,
+        description: describePendingAction(task.tool, task.params),
       }));
 
-    console.log('🔧 Immediate tools:', immediateTools);
+    console.log('🔧 Immediate tools:', immediateTasks.map(t => t.label));
     console.log('⏳ Pending (needs confirmation):', pendingActions.map(a => a.tool));
 
     // Execute only immediate tools in parallel
     const toolResults: Record<string, unknown> = {};
-    const executionPromises = immediateTools.map(async (tool) => {
-      const toolParams = params[tool] || params[Object.keys(params).find(k => k.startsWith(tool)) ?? ''] || {};
-      const result = await executeTool(tool, toolParams, userId);
-      return { tool, result };
+    const executionPromises = immediateTasks.map(async (task) => {
+      const result = await executeTool(task.tool, task.params, userId);
+      return { label: task.label, result };
     });
 
     const results = await Promise.all(executionPromises);
-    for (const { tool, result } of results) {
-      toolResults[tool] = result;
+    for (const { label, result } of results) {
+      toolResults[label] = result;
     }
+    const immediateTools = [...new Set(immediateTasks.map(task => task.tool))];
 
     // ── Build query-type-specific user prompt ────────────────────────────
     const pendingNote = pendingActions.length > 0
@@ -2044,6 +2135,8 @@ THREAD FORMAT: Yanıtını "|||" ile ayırdığın 2-3 kısa mesaj olarak ver. H
 Yalnızca objektif, veri-temelli analiz yap. Yatırım tavsiyesi, öneri veya yönlendirme verme.
 Yonlendirici eylem cagrisi iceren ifadeler kullanma. "Sinyal" yerine "gösterge durumu" ifadesini tercih et.
 Emoji kullan ama abartma. Her mesaj maksimum 5 madde içersin.
+Araç sonuçlarında rakam varsa mutlaka kullan; yanıtta en az 3 somut veri noktası (fiyat, yüzde değişim, hacim, seviye vb.) ver.
+Araçlardan hata gelirse bunu açıkça belirt ve hangi verinin eksik olduğunu söyle.
 
 Matematiksel göstergeler varsa şu şekilde yorumla:
 - RSI < 30 = asiri dusuk bolge | RSI > 70 = asiri yuksek bolge
@@ -2090,14 +2183,18 @@ Thread mesajlarının birinde şu cümle aynen geçmeli: "${LEGAL_DISCLAIMER}"`;
       // Approximate token usage
       const approxTokens = Math.ceil(rawText.length / 4);
       if (approxTokens > 0) recordTokenUsage(userId, approxTokens, sb);
-    } catch (_zaiErr) {
+    } catch (zaiErr) {
+      console.warn('Primary agent response failed, trying fallback provider:', zaiErr);
       // Fallback: direct API call with sanitized messages
       try {
+        const fallbackApiKey = process.env.OPENAI_API_KEY || process.env.GROQ_API_KEY || '';
+        if (!fallbackApiKey) throw new Error('No fallback API key configured');
+
         const fallbackResp = await fetch('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${process.env.OPENAI_API_KEY || process.env.GROQ_API_KEY || ''}`,
+            'Authorization': `Bearer ${fallbackApiKey}`,
           },
           body: JSON.stringify({
             model: 'gpt-4o-mini',
@@ -2112,10 +2209,10 @@ Thread mesajlarının birinde şu cümle aynen geçmeli: "${LEGAL_DISCLAIMER}"`;
           const usage = fallbackData.usage?.total_tokens ?? 0;
           if (usage > 0) recordTokenUsage(userId, usage, sb);
         }
-      } catch (_fallbackErr) {
-        // ignore
+      } catch (fallbackErr) {
+        console.warn('Fallback agent response failed:', fallbackErr);
       }
-      if (!rawText) rawText = `İşlem tamamlandı. Araçlar: ${immediateTools.join(', ')}`;
+      if (!rawText) rawText = buildBackupAgentResponse(toolResults, pendingActions);
     }
 
     // Extract "SORULAR:" line for suggested questions
@@ -2147,6 +2244,10 @@ Thread mesajlarının birinde şu cümle aynen geçmeli: "${LEGAL_DISCLAIMER}"`;
       toolsUsed: immediateTools,
       toolResults,
       pendingActions: pendingActions.length > 0 ? pendingActions : undefined,
+      usage: {
+        dailyTokenLimit: LIMITS.user.dailyTokens,
+        remainingTokens: Math.max(0, remainingTokens),
+      },
       timestamp: new Date().toISOString(),
     });
 
