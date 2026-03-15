@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import ZAI from 'z-ai-web-dev-sdk';
 import { cookies } from 'next/headers';
 import { serverClient } from '@/lib/supabase';
+import { fetchBistStocks } from '@/lib/bist-stocks';
 
 // ─── Supabase client helper (uses user's session JWT for RLS) ────────────────
 async function getAgentSupabaseClient() {
@@ -243,26 +244,23 @@ async function getStockPrice(symbol: string) {
   }
 
   try {
-    const response = await fetch(`https://api.asenax.com/bist/get/${symbol.toUpperCase()}`);
-    const data = await response.json();
-    
-    if (data.code === "0" && data.data?.hisseYuzeysel) {
-      const d = data.data.hisseYuzeysel;
+    const stocks = await fetchBistStocks();
+    const d = stocks.find(stock => stock.code === symbol.toUpperCase());
+
+    if (d) {
       const result = {
         success: true,
         data: {
-          symbol: d.sembol,
-          name: d.aciklama,
-          price: d.kapanis,
-          change: d.net,
-          changePercent: d.yuzdedegisim,
-          volume: d.hacimlot,
-          high: d.yuksek,
-          low: d.dusuk,
-          open: d.acilis,
-          previousClose: d.dunkukapanis,
-          ceiling: d.tavan,
-          floor: d.taban,
+          symbol: d.code,
+          name: d.name,
+          price: d.price,
+          change: d.change,
+          changePercent: d.changePercent,
+          volume: d.volume,
+          high: d.high,
+          low: d.low,
+          open: d.open,
+          previousClose: d.previousClose,
         },
       };
       stockPriceCache[symbol] = { data: result, timestamp: Date.now() };
@@ -338,7 +336,7 @@ async function webSearchForPrice(symbol: string) {
     const items = extractSearchContent(results);
     return {
       success: true,
-      note: 'Asenax API erişilemedi — web aramasından elde edildi',
+      note: 'Birincil BIST veri kaynağı erişilemedi — web aramasından elde edildi',
       searchResults: items.slice(0, 3),
     };
   } catch (error) {
@@ -725,52 +723,20 @@ async function scanMarket(industry?: string) {
   }
 
   try {
-    // Get stock list
-    const listResponse = await fetch('https://api.asenax.com/bist/list');
-    const listData = await listResponse.json();
-    
-    let stocks: { code: string; name: string }[] = [];
-    if (listData.code === "0" && Array.isArray(listData.data)) {
-      stocks = listData.data
-        .filter((item: { tip?: string }) => item.tip === "Hisse")
-        .map((item: { kod?: string; ad?: string }) => ({ code: item.kod, name: item.ad }));
-    }
-    
-    // Batch fetch prices
-    const results: Array<{
-      code: string;
-      name: string;
-      price: number;
-      changePercent: number;
-      volume: number;
-      high: number;
-      low: number;
-    }> = [];
-    
-    const toFetch = stocks.slice(0, 100);
-    
-    // Parallel fetch in batches
-    const batchSize = 20;
-    for (let i = 0; i < toFetch.length; i += batchSize) {
-      const batch = toFetch.slice(i, i + batchSize);
-      const batchResults = await Promise.all(
-        batch.map(async (stock) => {
-          const priceData = await getStockPrice(stock.code);
-          if (priceData.success && priceData.data.price > 0) {
-            return {
-              code: stock.code,
-              name: stock.name,
-              ...priceData.data,
-            };
-          }
-          return null;
-        })
-      );
-      results.push(...batchResults.filter(Boolean) as typeof results);
-    }
-    
-    // Sort and categorize
-    const sorted = results.sort((a, b) => b.changePercent - a.changePercent);
+    const stocks = await fetchBistStocks();
+    const normalized = stocks.slice(0, 200).map(stock => ({
+      code: stock.code,
+      name: stock.name,
+      price: stock.price,
+      changePercent: stock.changePercent,
+      volume: stock.volume,
+      high: stock.high,
+      low: stock.low,
+    }));
+
+    const sorted = normalized
+      .filter(stock => stock.price > 0)
+      .sort((a, b) => b.changePercent - a.changePercent);
     
     const result = { 
       success: true, 
@@ -779,7 +745,7 @@ async function scanMarket(industry?: string) {
         gainers: sorted.filter(s => s.changePercent > 0).slice(0, 15),
         losers: sorted.filter(s => s.changePercent < 0).sort((a, b) => a.changePercent - b.changePercent).slice(0, 15),
         total: sorted.length,
-        avgChange: sorted.reduce((a, b) => a + b.changePercent, 0) / sorted.length,
+        avgChange: sorted.length > 0 ? sorted.reduce((a, b) => a + b.changePercent, 0) / sorted.length : 0,
       },
     };
     
