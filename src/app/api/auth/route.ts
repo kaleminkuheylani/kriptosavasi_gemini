@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { supabase, serverClient } from '@/lib/supabase';
+import { getSupabaseConfigIssue, supabase, serverClient } from '@/lib/supabase';
 
 // ── Validation helpers ──────────────────────────────────────────────────────
 
@@ -30,6 +30,17 @@ function buildRumuzFromEmail(email: string): string {
 function pickRandomAvatar(): string {
   const avatars = ['emerald', 'cyan', 'violet', 'amber', 'rose', 'blue', 'green', 'purple', 'orange', 'pink'];
   return avatars[Math.floor(Math.random() * avatars.length)];
+}
+
+function mapSupabaseErrorMessage(message: string): string {
+  const lower = message.toLowerCase();
+  if (lower.includes('fetch failed') || lower.includes('failed to fetch') || lower.includes('network')) {
+    return 'Supabase bağlantısı kurulamadı. Lütfen ortam değişkenlerini ve ağ bağlantısını kontrol edin.';
+  }
+  if (lower.includes('invalid api key') || lower.includes('apikey')) {
+    return 'Supabase API anahtarı geçersiz görünüyor. Ortam değişkenlerini kontrol edin.';
+  }
+  return message;
 }
 
 const COOKIE_ACCESS  = 'sb-access-token';
@@ -64,6 +75,11 @@ export async function getAccessToken(): Promise<string | null> {
 
 export async function GET() {
   try {
+    const configIssue = getSupabaseConfigIssue();
+    if (configIssue) {
+      return NextResponse.json({ success: false, user: null, error: configIssue }, { status: 503 });
+    }
+
     const token = await getAccessToken();
     if (!token) return NextResponse.json({ success: false, user: null });
 
@@ -116,6 +132,11 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
+    const configIssue = getSupabaseConfigIssue();
+    if (configIssue) {
+      return NextResponse.json({ success: false, error: configIssue }, { status: 503 });
+    }
+
     let body: unknown;
     try {
       body = await request.json();
@@ -165,7 +186,7 @@ export async function POST(request: NextRequest) {
       if (error) {
         const msg = error.message.toLowerCase().includes('already registered')
           ? 'Bu e-posta zaten kayıtlı. Giriş yapmayı deneyin.'
-          : error.message;
+          : mapSupabaseErrorMessage(error.message);
         return NextResponse.json({ success: false, error: msg }, { status: 400 });
       }
 
@@ -221,7 +242,7 @@ export async function POST(request: NextRequest) {
     if (error) {
       const msg = error.message.includes('Invalid login')
         ? 'E-posta veya şifre hatalı.'
-        : error.message;
+        : mapSupabaseErrorMessage(error.message);
       return NextResponse.json({ success: false, error: msg }, { status: 401 });
     }
 
@@ -273,6 +294,11 @@ export async function POST(request: NextRequest) {
 
 export async function DELETE() {
   try {
+    const configIssue = getSupabaseConfigIssue();
+    if (configIssue) {
+      return NextResponse.json({ success: true, message: 'Çıkış yapıldı' });
+    }
+
     const token = await getAccessToken();
     if (token) {
       const sb = serverClient(token);
