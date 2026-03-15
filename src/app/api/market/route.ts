@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { fetchBistStocks, STOCK_SECTORS } from '@/lib/bist-stocks';
+import { fetchGlobalMarketByType, fetchGlobalMarketsSnapshot } from '@/lib/twelve-data-markets';
 
 async function getStocks() {
   const stocks = await fetchBistStocks();
@@ -10,6 +11,26 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const type   = searchParams.get('type');
   const symbol = searchParams.get('symbol');
+
+  if (type === 'global') {
+    const snapshot = await fetchGlobalMarketsSnapshot();
+    return NextResponse.json({ success: true, data: snapshot, timestamp: snapshot.timestamp, source: snapshot.source });
+  }
+
+  if (type === 'digital' || type === 'crypto') {
+    const data = await fetchGlobalMarketByType('digital');
+    return NextResponse.json({ success: true, data, count: data.length, timestamp: new Date().toISOString() });
+  }
+
+  if (type === 'forex') {
+    const data = await fetchGlobalMarketByType('forex');
+    return NextResponse.json({ success: true, data, count: data.length, timestamp: new Date().toISOString() });
+  }
+
+  if (type === 'nasdaq') {
+    const data = await fetchGlobalMarketByType('nasdaq');
+    return NextResponse.json({ success: true, data, count: data.length, timestamp: new Date().toISOString() });
+  }
 
   const stocks = await getStocks();
 
