@@ -21,6 +21,9 @@ export const metadata: Metadata = {
     title: "BIST 100 Egitim Platformu",
     description: "Canli hisse takibi ve teknik gosterge odakli egitimsel analiz",
   },
+  verification: {
+    google: "-xkmQLvLRKoxTr5aOPLjjtb-Amy7Tt8OksxuZaJpu8k",
+  },
 };
 
 export default function RootLayout({
