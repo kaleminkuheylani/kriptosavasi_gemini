@@ -1847,6 +1847,33 @@ function ensureThreadLegalDisclaimer(text: string): string {
   return `${text.trim()} ||| ⚖️ ${LEGAL_DISCLAIMER}`;
 }
 
+function buildBackupAgentResponse(
+  toolResults: Record<string, unknown>,
+  pendingActions: PendingAction[]
+): string {
+  const succeeded = Object.entries(toolResults)
+    .filter(([, value]) => (value as { success?: boolean })?.success)
+    .map(([tool]) => tool);
+  const failed = Object.entries(toolResults)
+    .filter(([, value]) => !(value as { success?: boolean })?.success)
+    .map(([tool]) => tool);
+
+  const parts = [
+    '⚠️ Yapay zeka yorum servisine şu an ulaşılamadı.',
+    succeeded.length > 0
+      ? `✅ Veri alınan araçlar: ${succeeded.join(', ')}`
+      : '✅ Mesajınız alındı, ancak yorum motoru geçici olarak yanıt veremiyor.',
+    failed.length > 0 ? `❌ Sorun yaşayan araçlar: ${failed.join(', ')}` : '',
+    pendingActions.length > 0
+      ? `⏳ Onay bekleyen işlemler: ${pendingActions.map(a => a.description).join(' | ')}`
+      : '',
+    '🔄 Birkaç dakika sonra tekrar denerseniz ayrıntılı analiz dönecektir.',
+    `⚖️ ${LEGAL_DISCLAIMER}`,
+  ].filter(Boolean);
+
+  return parts.join(' ||| ');
+}
+
 // AI Agent Handler
 export async function POST(request: NextRequest) {
   try {
@@ -2104,20 +2131,23 @@ Thread mesajlarının birinde şu cümle aynen geçmeli: "${LEGAL_DISCLAIMER}"`;
       const finalResponse = await zai.chat.completions.create({
         messages: chatMessages,
         thinking: { type: 'disabled' },
-        max_tokens: allowedTokens,
       } as Parameters<typeof zai.chat.completions.create>[0]);
       rawText = (finalResponse as { choices?: Array<{ message?: { content?: string } }> }).choices?.[0]?.message?.content || '';
       // Approximate token usage
       const approxTokens = Math.ceil(rawText.length / 4);
       if (approxTokens > 0) recordTokenUsage(userId, approxTokens, sb);
-    } catch (_zaiErr) {
+    } catch (zaiErr) {
+      console.warn('Primary agent response failed, trying fallback provider:', zaiErr);
       // Fallback: direct API call with sanitized messages
       try {
+        const fallbackApiKey = process.env.OPENAI_API_KEY || process.env.GROQ_API_KEY || '';
+        if (!fallbackApiKey) throw new Error('No fallback API key configured');
+
         const fallbackResp = await fetch('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${process.env.OPENAI_API_KEY || process.env.GROQ_API_KEY || ''}`,
+            'Authorization': `Bearer ${fallbackApiKey}`,
           },
           body: JSON.stringify({
             model: 'gpt-4o-mini',
@@ -2132,10 +2162,10 @@ Thread mesajlarının birinde şu cümle aynen geçmeli: "${LEGAL_DISCLAIMER}"`;
           const usage = fallbackData.usage?.total_tokens ?? 0;
           if (usage > 0) recordTokenUsage(userId, usage, sb);
         }
-      } catch (_fallbackErr) {
-        // ignore
+      } catch (fallbackErr) {
+        console.warn('Fallback agent response failed:', fallbackErr);
       }
-      if (!rawText) rawText = `İşlem tamamlandı. Araçlar: ${immediateTools.join(', ')}`;
+      if (!rawText) rawText = buildBackupAgentResponse(toolResults, pendingActions);
     }
 
     // Extract "SORULAR:" line for suggested questions
