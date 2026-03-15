@@ -9,10 +9,6 @@ export async function GET() {
     data: stocks,
     count: stocks.length,
     timestamp: new Date().toISOString(),
-    source: process.env.NOSYAPI_API_KEY
-      ? 'nosyapi'
-      : process.env.TWELVE_DATA_API_KEY
-        ? 'twelvedata'
-        : 'fallback',
+    source: process.env.NOSYAPI_API_KEY ? 'nosyapi' : 'fallback',
   });
 }

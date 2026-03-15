@@ -298,43 +298,6 @@ async function fetchFromNosyApi(): Promise<StockData[]> {
   return merged;
 }
 
-// ─── Twelve Data batch fetch ─────────────────────────────────────────────────
-async function fetchFromTwelveData(): Promise<StockData[]> {
-  const apiKey = process.env.TWELVE_DATA_API_KEY;
-  if (!apiKey) throw new Error('TWELVE_DATA_API_KEY eksik');
-
-  // Twelve Data: BIST sembolleri :XIST son ekiyle gönderilir
-  const symbolList = FALLBACK_STOCKS.map(s => `${s.code}:XIST`).join(',');
-  const url = `https://api.twelvedata.com/quote?symbol=${symbolList}&apikey=${apiKey}`;
-
-  const res = await fetch(url, { next: { revalidate: 60 } });
-  if (!res.ok) throw new Error(`Twelve Data HTTP ${res.status}`);
-
-  const json = await res.json();
-
-  // Tek sembol → obje, çoklu → { SYMBOL: obje, ... }
-  const quotes: Record<string, Record<string, string>> =
-    FALLBACK_STOCKS.length === 1 ? { [FALLBACK_STOCKS[0].code]: json } : json;
-
-  const merged = FALLBACK_STOCKS.map(fallback => {
-    const q = quotes[fallback.code];
-    if (!q || q.status === 'error' || !q.close) return fallback;
-
-    const price         = parseFloat(q.close)          || fallback.price;
-    const change        = parseFloat(q.change)         || fallback.change;
-    const changePercent = parseFloat(q.percent_change) || fallback.changePercent;
-    const volume        = parseInt(q.volume ?? '0')    || fallback.volume;
-    const high          = parseFloat(q.high)           || fallback.high;
-    const low           = parseFloat(q.low)            || fallback.low;
-    const open          = parseFloat(q.open)           || fallback.open;
-    const previousClose = parseFloat(q.previous_close) || fallback.previousClose;
-
-    return { ...fallback, price, change, changePercent, volume, high, low, open, previousClose };
-  });
-
-  return merged.slice(0, BIST_STOCK_LIMIT);
-}
-
 // ─── Ana fetch fonksiyonu (cache + fallback) ─────────────────────────────────
 export async function fetchBistStocks(): Promise<StockData[]> {
   const now = Date.now();
@@ -349,16 +312,7 @@ export async function fetchBistStocks(): Promise<StockData[]> {
     lastFetchTime = now;
     return stocks;
   } catch (nosyErr) {
-    console.warn('NosyAPI fetch başarısız, sıradaki sağlayıcı deneniyor:', nosyErr);
-  }
-
-  try {
-    const stocks = await fetchFromTwelveData();
-    cachedStocks = stocks;
-    lastFetchTime = now;
-    return stocks;
-  } catch (twelveErr) {
-    console.warn('Twelve Data fetch başarısız, fallback kullanılıyor:', twelveErr);
+    console.warn('NosyAPI fetch başarısız, fallback kullanılıyor:', nosyErr);
     if (cachedStocks.length === 0) {
       cachedStocks = FALLBACK_STOCKS.slice(0, BIST_STOCK_LIMIT);
       lastFetchTime = now;

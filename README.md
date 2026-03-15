@@ -28,7 +28,7 @@ Bu proje yatirim tavsiyesi vermez; tum icerikler finansal okuryazarlik amaciyla 
 
 ### Veri Kaynaklari
 - NosyAPI (BIST canli/gecikmeli hisse verileri, birincil kaynak)
-- Twelve Data API (BIST + Digital Currency + Forex + NASDAQ, yedek kaynak)
+- Twelve Data API (Digital Currency + Forex + NASDAQ global market verileri)
 - Finance API (gecmis veriler)
 - Groq API (LLM)
 - z-ai-web-dev-sdk (VLM, web arama)
