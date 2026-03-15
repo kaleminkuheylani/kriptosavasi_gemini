@@ -14,6 +14,24 @@ CREATE TABLE IF NOT EXISTS watchlist_items (
   updated_at  TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Keep symbols canonical and prevent duplicate watchlist entries per user
+UPDATE watchlist_items
+SET symbol = UPPER(symbol)
+WHERE symbol <> UPPER(symbol);
+
+DELETE FROM watchlist_items a
+USING watchlist_items b
+WHERE a.user_id = b.user_id
+  AND a.symbol = b.symbol
+  AND a.ctid < b.ctid;
+
+CREATE UNIQUE INDEX IF NOT EXISTS watchlist_items_user_symbol_unique
+  ON watchlist_items(user_id, symbol);
+CREATE INDEX IF NOT EXISTS watchlist_items_user_id_idx
+  ON watchlist_items(user_id);
+CREATE INDEX IF NOT EXISTS watchlist_items_symbol_idx
+  ON watchlist_items(symbol);
+
 -- 2. Price alerts
 CREATE TABLE IF NOT EXISTS price_alerts (
   id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -25,6 +43,10 @@ CREATE TABLE IF NOT EXISTS price_alerts (
   triggered    BOOLEAN DEFAULT FALSE,
   created_at   TIMESTAMPTZ DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS price_alerts_user_id_idx
+  ON price_alerts(user_id);
+CREATE INDEX IF NOT EXISTS price_alerts_symbol_idx
+  ON price_alerts(symbol);
 
 -- 3. Usage tracking (daily requests + tokens per user)
 CREATE TABLE IF NOT EXISTS user_usage (
@@ -34,6 +56,8 @@ CREATE TABLE IF NOT EXISTS user_usage (
   token_count   INT  DEFAULT 0,
   PRIMARY KEY (user_id, date)
 );
+CREATE INDEX IF NOT EXISTS user_usage_user_date_idx
+  ON user_usage(user_id, date);
 
 -- 4. Stock comments
 CREATE TABLE IF NOT EXISTS stock_comments (

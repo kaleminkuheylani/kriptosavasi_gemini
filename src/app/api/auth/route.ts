@@ -17,6 +17,21 @@ function validatePassword(password: string): string | null {
   return null;
 }
 
+function buildRumuzFromEmail(email: string): string {
+  const prefix = email
+    .split('@')[0]
+    .replace(/[^a-zA-Z0-9_ğüşıöçĞÜŞİÖÇ]/g, '')
+    .slice(0, 20);
+
+  if (prefix) return prefix;
+  return `kullanici_${Math.floor(Math.random() * 100000)}`;
+}
+
+function pickRandomAvatar(): string {
+  const avatars = ['emerald', 'cyan', 'violet', 'amber', 'rose', 'blue', 'green', 'purple', 'orange', 'pink'];
+  return avatars[Math.floor(Math.random() * avatars.length)];
+}
+
 const COOKIE_ACCESS  = 'sb-access-token';
 const COOKIE_REFRESH = 'sb-refresh-token';
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 7; // 7 days
@@ -101,26 +116,45 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { email, password, action } = body as {
-      email: string;
-      password: string;
-      action: 'login' | 'register';
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ success: false, error: 'Geçersiz istek gövdesi' }, { status: 400 });
+    }
+
+    const { email, password, action } = (body ?? {}) as {
+      email?: string;
+      password?: string;
+      action?: 'login' | 'register';
     };
 
+    if (action !== 'login' && action !== 'register') {
+      return NextResponse.json({ success: false, error: 'Geçersiz işlem türü' }, { status: 400 });
+    }
+
     // Validation
-    const emailErr = validateEmail(email?.trim());
+    const normalizedEmailInput = String(email ?? '').trim();
+    const emailErr = validateEmail(normalizedEmailInput);
     if (emailErr) return NextResponse.json({ success: false, error: emailErr }, { status: 400 });
 
-    const passErr = validatePassword(password);
-    if (passErr)  return NextResponse.json({ success: false, error: passErr  }, { status: 400 });
-
-    const normalizedEmail = email.trim().toLowerCase();
+    if (typeof password !== 'string' || password.length === 0) {
+      return NextResponse.json({ success: false, error: 'Şifre gerekli' }, { status: 400 });
+    }
+    if (password.length > 256) {
+      return NextResponse.json({ success: false, error: 'Şifre çok uzun' }, { status: 400 });
+    }
 
     if (action === 'register') {
-      const rumuz = normalizedEmail.split('@')[0].replace(/[^a-zA-Z0-9_ğüşıöçĞÜŞİÖÇ]/g, '').slice(0, 20);
-      const avatars = ['emerald','cyan','violet','amber','rose','blue','green','purple','orange','pink'];
-      const avatar  = avatars[Math.floor(Math.random() * avatars.length)];
+      const passErr = validatePassword(password);
+      if (passErr) return NextResponse.json({ success: false, error: passErr }, { status: 400 });
+    }
+
+    const normalizedEmail = normalizedEmailInput.toLowerCase();
+
+    if (action === 'register') {
+      const rumuz = buildRumuzFromEmail(normalizedEmail);
+      const avatar = pickRandomAvatar();
 
       const { data, error } = await supabase.auth.signUp({
         email: normalizedEmail,
@@ -129,10 +163,26 @@ export async function POST(request: NextRequest) {
       });
 
       if (error) {
-        const msg = error.message.includes('already registered')
+        const msg = error.message.toLowerCase().includes('already registered')
           ? 'Bu e-posta zaten kayıtlı. Giriş yapmayı deneyin.'
           : error.message;
         return NextResponse.json({ success: false, error: msg }, { status: 400 });
+      }
+
+      const signUpUser = data.user;
+      const hasEmptyIdentity =
+        signUpUser &&
+        Array.isArray(signUpUser.identities) &&
+        signUpUser.identities.length === 0;
+      if (hasEmptyIdentity) {
+        return NextResponse.json(
+          { success: false, error: 'Bu e-posta zaten kayıtlı. Giriş yapmayı deneyin.' },
+          { status: 409 }
+        );
+      }
+
+      if (!signUpUser) {
+        return NextResponse.json({ success: false, error: 'Kayıt tamamlanamadı' }, { status: 500 });
       }
 
       // When email confirmation is ON in Supabase, session is null
@@ -149,11 +199,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         success: true,
         user: {
-          id: data.user!.id,
-          email: data.user!.email,
+          id: signUpUser.id,
+          email: signUpUser.email,
           rumuz,
           avatar,
-          createdAt: data.user!.created_at,
+          createdAt: signUpUser.created_at,
           watchlistCount: 0,
           alertsCount: 0,
           usage: { todayRequests: 0, todayTokens: 0 },
@@ -173,6 +223,10 @@ export async function POST(request: NextRequest) {
         ? 'E-posta veya şifre hatalı.'
         : error.message;
       return NextResponse.json({ success: false, error: msg }, { status: 401 });
+    }
+
+    if (!data.session || !data.user) {
+      return NextResponse.json({ success: false, error: 'Oturum açılamadı' }, { status: 401 });
     }
 
     await setSessionCookies(data.session.access_token, data.session.refresh_token);
