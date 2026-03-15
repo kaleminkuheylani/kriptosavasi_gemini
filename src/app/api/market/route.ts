@@ -13,8 +13,16 @@ export async function GET(request: NextRequest) {
   const symbol = searchParams.get('symbol');
 
   if (type === 'global') {
-    const snapshot = await fetchGlobalMarketsSnapshot();
-    return NextResponse.json({ success: true, data: snapshot, timestamp: snapshot.timestamp, source: snapshot.source });
+    try {
+      const snapshot = await fetchGlobalMarketsSnapshot();
+      return NextResponse.json({ success: true, data: snapshot, timestamp: snapshot.timestamp, source: snapshot.source });
+    } catch (error) {
+      console.error('Global market verisi alinamadi:', error);
+      return NextResponse.json(
+        { success: false, error: 'Twelve Data kaynakli global piyasa verisi alinamadi' },
+        { status: 503 },
+      );
+    }
   }
 
   if (type === 'digital' || type === 'crypto') {

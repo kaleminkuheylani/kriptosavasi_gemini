@@ -222,7 +222,7 @@ const TOOL_CATEGORIES = [
 const TABS = [
   { id: 'dashboard', label: 'Ana Sayfa', icon: LayoutDashboard },
   { id: 'stocks',    label: 'Hisseler',  icon: Database },
-  { id: 'market',    label: 'Market',    icon: TrendingUp },
+  { id: 'market',    label: 'Piyasalar', icon: TrendingUp },
   { id: 'watchlist', label: 'Takip',     icon: Star },
   { id: 'alerts',    label: 'Bildirim',  icon: Bell },
 ];
@@ -243,7 +243,6 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
-  const [marketTab, setMarketTab] = useState<'gainers' | 'losers' | 'active'>('gainers');
   
   // Market Summary
   const [marketSummary, setMarketSummary] = useState<{
@@ -399,8 +398,10 @@ export default function Home() {
           digitalCurrencies: data.data.digitalCurrencies ?? [],
           forex: data.data.forex ?? [],
           nasdaq: data.data.nasdaq ?? [],
-          source: data.source ?? data.data.source ?? 'fallback',
+          source: data.source ?? data.data.source ?? 'twelvedata',
         });
+      } else {
+        setGlobalMarketData(null);
       }
     } catch {
       setGlobalMarketData(null);
@@ -1404,7 +1405,7 @@ export default function Home() {
                     title="En Cok Kazandiranlar" 
                     icon={TrendingUp} 
                     color="text-emerald-400"
-                    onSeeAll={() => { setMarketTab('gainers'); setActiveTab('market'); }}
+                    onSeeAll={() => setActiveTab('market')}
                   >
                     {[...stocks].sort((a, b) => b.changePercent - a.changePercent).slice(0, 5).map((stock) => (
                       <StockCard key={stock.code} stock={stock} />
@@ -1416,7 +1417,7 @@ export default function Home() {
                     title="En Cok Kaybettirenler" 
                     icon={TrendingDown} 
                     color="text-red-400"
-                    onSeeAll={() => { setMarketTab('losers'); setActiveTab('market'); }}
+                    onSeeAll={() => setActiveTab('market')}
                   >
                     {[...stocks].sort((a, b) => a.changePercent - b.changePercent).slice(0, 5).map((stock) => (
                       <StockCard key={stock.code} stock={stock} />
@@ -1482,57 +1483,6 @@ export default function Home() {
                     )}
                   </SectionCard>
                 </div>
-
-                <SectionCard
-                  title="Kuresel Piyasalar (Twelve Data)"
-                  icon={Globe}
-                  color="text-cyan-400"
-                >
-                  {globalMarketData ? (
-                    <div className="p-4 space-y-4">
-                      <div className="grid md:grid-cols-3 gap-4">
-                        {[
-                          { key: 'digitalCurrencies', title: 'Digital Currency', items: globalMarketData.digitalCurrencies },
-                          { key: 'forex', title: 'Forex', items: globalMarketData.forex },
-                          { key: 'nasdaq', title: 'NASDAQ', items: globalMarketData.nasdaq },
-                        ].map(section => (
-                          <div key={section.key} className="rounded-lg border border-slate-800 bg-slate-800/30">
-                            <div className="px-3 py-2 border-b border-slate-800">
-                              <p className="text-sm font-semibold text-white">{section.title}</p>
-                            </div>
-                            <div className="p-2 space-y-1">
-                              {section.items.slice(0, 4).map(item => (
-                                <div key={item.symbol} className="flex items-center justify-between rounded-md px-2 py-2 hover:bg-slate-800/60">
-                                  <div>
-                                    <p className="text-sm font-medium text-white">{item.symbol}</p>
-                                    <p className="text-[11px] text-slate-500 truncate max-w-[140px]">{item.name}</p>
-                                  </div>
-                                  <div className="text-right">
-                                    <p className="text-sm text-white">
-                                      {formatGlobalPrice(item)}
-                                      {item.market === 'forex' ? '' : ' USD'}
-                                    </p>
-                                    <p className={`text-xs ${item.changePercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                                      {item.changePercent >= 0 ? '+' : ''}{formatNumber(item.changePercent, 2)}%
-                                    </p>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                      <p className="text-[11px] text-slate-500">
-                        Kaynak: {globalMarketData.source === 'twelvedata' ? 'Twelve Data' : 'Fallback'}
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="p-6 text-center text-slate-500">
-                      <Globe className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                      <p>Kuresel piyasa verileri su an alinamiyor</p>
-                    </div>
-                  )}
-                </SectionCard>
 
                 {/* Categories */}
                 <SectionCard 
@@ -1622,48 +1572,59 @@ export default function Home() {
             {/* Market Tab */}
             {activeTab === 'market' && (
               <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
-                {/* Alt sekme başlıkları */}
-                <div className="flex border-b border-slate-800">
-                  {([
-                    { id: 'gainers', label: 'Kazananlar', icon: TrendingUp,   color: 'text-emerald-400', active: 'border-emerald-500 text-emerald-400' },
-                    { id: 'losers',  label: 'Düşenler',   icon: TrendingDown, color: 'text-red-400',     active: 'border-red-500 text-red-400' },
-                    { id: 'active',  label: 'En Aktif',   icon: BarChart3,    color: 'text-sky-400',     active: 'border-sky-500 text-sky-400' },
-                  ] as const).map(tab => (
-                    <button
-                      key={tab.id}
-                      onClick={() => setMarketTab(tab.id)}
-                      className={`flex-1 flex items-center justify-center gap-2 py-3 text-sm font-medium border-b-2 transition-colors ${
-                        marketTab === tab.id
-                          ? tab.active + ' bg-slate-800/50'
-                          : 'border-transparent text-slate-500 hover:text-slate-300'
-                      }`}
-                    >
-                      <tab.icon className={`h-4 w-4 ${marketTab === tab.id ? tab.color : ''}`} />
-                      {tab.label}
-                    </button>
-                  ))}
+                <div className="p-4 border-b border-slate-800">
+                  <h3 className="font-semibold text-white flex items-center gap-2">
+                    <Globe className="h-5 w-5 text-cyan-400" />
+                    Kuresel Piyasalar
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Veriler Twelve Data uzerinden anlik olarak alinmaktadir.
+                  </p>
                 </div>
 
-                {/* İçerik */}
-                <div className="max-h-[70vh] overflow-y-auto">
-                  {marketTab === 'gainers' &&
-                    [...stocks]
-                      .filter(s => s.changePercent > 0)
-                      .sort((a, b) => b.changePercent - a.changePercent)
-                      .map(stock => <StockCard key={stock.code} stock={stock} />)
-                  }
-                  {marketTab === 'losers' &&
-                    [...stocks]
-                      .filter(s => s.changePercent < 0)
-                      .sort((a, b) => a.changePercent - b.changePercent)
-                      .map(stock => <StockCard key={stock.code} stock={stock} />)
-                  }
-                  {marketTab === 'active' &&
-                    [...stocks]
-                      .sort((a, b) => b.volume - a.volume)
-                      .map(stock => <StockCard key={stock.code} stock={stock} />)
-                  }
-                </div>
+                {globalMarketData ? (
+                  <div className="p-4 space-y-4">
+                    <div className="grid md:grid-cols-2 gap-4">
+                      {[
+                        { key: 'digitalCurrencies', title: 'Digital Currency', items: globalMarketData.digitalCurrencies },
+                        { key: 'forex', title: 'Forex', items: globalMarketData.forex },
+                      ].map(section => (
+                        <div key={section.key} className="rounded-lg border border-slate-800 bg-slate-800/30">
+                          <div className="px-3 py-2 border-b border-slate-800">
+                            <p className="text-sm font-semibold text-white">{section.title}</p>
+                          </div>
+                          <div className="p-2 space-y-1">
+                            {section.items.slice(0, 8).map(item => (
+                              <div key={item.symbol} className="flex items-center justify-between rounded-md px-2 py-2 hover:bg-slate-800/60">
+                                <div>
+                                  <p className="text-sm font-medium text-white">{item.symbol}</p>
+                                  <p className="text-[11px] text-slate-500 truncate max-w-[180px]">{item.name}</p>
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-sm text-white">
+                                    {formatGlobalPrice(item)}
+                                    {item.market === 'forex' ? '' : ' USD'}
+                                  </p>
+                                  <p className={`text-xs ${item.changePercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                                    {item.changePercent >= 0 ? '+' : ''}{formatNumber(item.changePercent, 2)}%
+                                  </p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Kaynak: Twelve Data
+                    </p>
+                  </div>
+                ) : (
+                  <div className="p-8 text-center text-slate-500">
+                    <Globe className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                    <p>Kuresel piyasa verileri Twelve Data uzerinden alinamadi</p>
+                  </div>
+                )}
               </div>
             )}
 
