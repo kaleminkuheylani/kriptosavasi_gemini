@@ -33,7 +33,7 @@ export interface CryptoAsset {
 }
 
 export interface CryptoSnapshot {
-  source: 'coinmarketcap';
+  source: 'coinmarketcap' | 'coingecko-fallback';
   convert: string;
   timestamp: string;
   market: {
@@ -103,6 +103,47 @@ interface CmcGlobalMetrics {
   total_market_cap?: Record<string, number | undefined>;
   total_volume_24h?: Record<string, number | undefined>;
   market_cap_change_percentage_24h_usd?: number;
+}
+
+interface CoinGeckoMarketItem {
+  id?: string;
+  symbol?: string;
+  name?: string;
+  market_cap_rank?: number;
+  current_price?: number;
+  market_cap?: number;
+  fully_diluted_valuation?: number;
+  total_volume?: number;
+  circulating_supply?: number;
+  total_supply?: number;
+  max_supply?: number | null;
+  price_change_percentage_1h_in_currency?: number;
+  price_change_percentage_24h_in_currency?: number;
+  price_change_percentage_7d_in_currency?: number;
+  price_change_percentage_30d_in_currency?: number;
+  price_change_percentage_60d_in_currency?: number;
+  price_change_percentage_90d_in_currency?: number;
+}
+
+interface CoinGeckoGlobalResponse {
+  data?: {
+    active_cryptocurrencies?: number;
+    markets?: number;
+    total_market_cap?: Record<string, number | undefined>;
+    total_volume?: Record<string, number | undefined>;
+    market_cap_percentage?: Record<string, number | undefined>;
+    market_cap_change_percentage_24h_usd?: number;
+  };
+}
+
+interface SnapshotMarketStats {
+  totalMarketCap: number;
+  totalVolume24h: number;
+  marketCapChange24h: number;
+  btcDominance: number;
+  ethDominance: number;
+  activeCryptocurrencies: number;
+  activeMarketPairs: number;
 }
 
 const API_BASE = 'https://pro-api.coinmarketcap.com';
@@ -293,43 +334,92 @@ async function fetchGlobalMetrics(convert: string): Promise<CmcGlobalMetrics> {
   });
 }
 
+async function fetchCoinGeckoSnapshot(limit: number, convert: string): Promise<CryptoSnapshot> {
+  const vsCurrency = convert.toLowerCase();
+  const marketsUrl = new URL('https://api.coingecko.com/api/v3/coins/markets');
+  marketsUrl.searchParams.set('vs_currency', vsCurrency);
+  marketsUrl.searchParams.set('order', 'market_cap_desc');
+  marketsUrl.searchParams.set('per_page', String(clamp(limit, 10, 200)));
+  marketsUrl.searchParams.set('page', '1');
+  marketsUrl.searchParams.set('sparkline', 'false');
+  marketsUrl.searchParams.set('price_change_percentage', '1h,24h,7d,30d,60d,90d');
+
+  const [marketsResponse, globalResponse] = await Promise.all([
+    fetch(marketsUrl, { cache: 'no-store' }),
+    fetch('https://api.coingecko.com/api/v3/global', { cache: 'no-store' }),
+  ]);
+
+  if (!marketsResponse.ok) {
+    throw new Error(`CoinGecko markets HTTP ${marketsResponse.status}`);
+  }
+  if (!globalResponse.ok) {
+    throw new Error(`CoinGecko global HTTP ${globalResponse.status}`);
+  }
+
+  const markets = (await marketsResponse.json()) as CoinGeckoMarketItem[];
+  const globalPayload = (await globalResponse.json()) as CoinGeckoGlobalResponse;
+  if (!Array.isArray(markets) || markets.length === 0) {
+    throw new Error('CoinGecko gecerli market verisi donmedi');
+  }
+
+  const assets = markets
+    .map((item, index) => {
+      const rank = Math.max(1, Math.round(toNumber(item.market_cap_rank, index + 1)));
+      const symbol = (item.symbol ?? `asset-${rank}`).toUpperCase();
+      const mapped = {
+        id: rank,
+        rank,
+        name: item.name ?? symbol,
+        symbol,
+        slug: item.id ?? symbol.toLowerCase(),
+        tags: [] as string[],
+        price: toNumber(item.current_price),
+        marketCap: toNumber(item.market_cap),
+        marketCapDominance: 0,
+        fullyDilutedMarketCap: toNumber(item.fully_diluted_valuation),
+        volume24h: toNumber(item.total_volume),
+        volumeChange24h: 0,
+        circulatingSupply: toNumber(item.circulating_supply),
+        totalSupply: toNumber(item.total_supply),
+        maxSupply: item.max_supply === null || item.max_supply === undefined ? null : toNumber(item.max_supply),
+        percentChange1h: toNumber(item.price_change_percentage_1h_in_currency),
+        percentChange24h: toNumber(item.price_change_percentage_24h_in_currency),
+        percentChange7d: toNumber(item.price_change_percentage_7d_in_currency),
+        percentChange30d: toNumber(item.price_change_percentage_30d_in_currency),
+        percentChange60d: toNumber(item.price_change_percentage_60d_in_currency),
+        percentChange90d: toNumber(item.price_change_percentage_90d_in_currency),
+      };
+
+      return {
+        ...mapped,
+        analysis: buildAnalysis(mapped),
+      } as CryptoAsset;
+    })
+    .filter((asset) => asset.marketCap > 0 || asset.price > 0);
+
+  if (assets.length === 0) {
+    throw new Error('CoinGecko sonuclarindan islenebilir coin bulunamadi');
+  }
+
+  const marketStats: SnapshotMarketStats = {
+    totalMarketCap: toNumber(globalPayload.data?.total_market_cap?.[vsCurrency]),
+    totalVolume24h: toNumber(globalPayload.data?.total_volume?.[vsCurrency]),
+    marketCapChange24h: toNumber(globalPayload.data?.market_cap_change_percentage_24h_usd),
+    btcDominance: toNumber(globalPayload.data?.market_cap_percentage?.btc),
+    ethDominance: toNumber(globalPayload.data?.market_cap_percentage?.eth),
+    activeCryptocurrencies: toNumber(globalPayload.data?.active_cryptocurrencies),
+    activeMarketPairs: toNumber(globalPayload.data?.markets),
+  };
+
+  return buildSnapshot('coingecko-fallback', convert.toUpperCase(), assets, marketStats);
+}
+
 function average(values: number[]): number {
   if (values.length === 0) return 0;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
-export async function fetchCryptoSnapshot(limit = 100, convert = 'USD'): Promise<CryptoSnapshot> {
-  const normalizedLimit = clamp(Math.round(limit), 10, 200);
-  const normalizedConvert = convert.toUpperCase();
-
-  const now = Date.now();
-  if (
-    cachedSnapshot &&
-    now - cachedAt < CACHE_DURATION_MS &&
-    cachedSnapshot.convert === normalizedConvert &&
-    cachedSnapshot.assets.length === normalizedLimit
-  ) {
-    return cachedSnapshot;
-  }
-
-  let assets: CryptoAsset[];
-  let globalMetrics: CmcGlobalMetrics;
-  try {
-    [assets, globalMetrics] = await Promise.all([
-      fetchListings(normalizedLimit, normalizedConvert),
-      fetchGlobalMetrics(normalizedConvert),
-    ]);
-  } catch (error) {
-    if (cachedSnapshot && cachedSnapshot.convert === normalizedConvert) {
-      return cachedSnapshot;
-    }
-    throw error;
-  }
-
-  if (assets.length === 0) {
-    throw new Error('CoinMarketCap gecerli veri donmedi');
-  }
-
+function buildSnapshot(source: CryptoSnapshot['source'], convert: string, assets: CryptoAsset[], market: SnapshotMarketStats): CryptoSnapshot {
   const positive24hCount = assets.filter((asset) => asset.percentChange24h > 0).length;
   const negative24hCount = assets.filter((asset) => asset.percentChange24h < 0).length;
   const highRiskAssets = assets
@@ -343,18 +433,18 @@ export async function fetchCryptoSnapshot(limit = 100, convert = 'USD'): Promise
       volatilityScore: asset.analysis.volatilityScore,
     }));
 
-  const snapshot: CryptoSnapshot = {
-    source: 'coinmarketcap',
-    convert: normalizedConvert,
+  return {
+    source,
+    convert,
     timestamp: new Date().toISOString(),
     market: {
-      totalMarketCap: toNumber(globalMetrics.total_market_cap?.[normalizedConvert]),
-      totalVolume24h: toNumber(globalMetrics.total_volume_24h?.[normalizedConvert]),
-      marketCapChange24h: toNumber(globalMetrics.market_cap_change_percentage_24h_usd),
-      btcDominance: toNumber(globalMetrics.btc_dominance),
-      ethDominance: toNumber(globalMetrics.eth_dominance),
-      activeCryptocurrencies: toNumber(globalMetrics.active_cryptocurrencies),
-      activeMarketPairs: toNumber(globalMetrics.active_market_pairs),
+      totalMarketCap: market.totalMarketCap,
+      totalVolume24h: market.totalVolume24h,
+      marketCapChange24h: market.marketCapChange24h,
+      btcDominance: market.btcDominance,
+      ethDominance: market.ethDominance,
+      activeCryptocurrencies: market.activeCryptocurrencies,
+      activeMarketPairs: market.activeMarketPairs,
       positive24hCount,
       negative24hCount,
       advanceDeclineRatio: negative24hCount === 0 ? positive24hCount : +(positive24hCount / negative24hCount).toFixed(2),
@@ -385,8 +475,60 @@ export async function fetchCryptoSnapshot(limit = 100, convert = 'USD'): Promise
     },
     assets,
   };
+}
 
-  cachedSnapshot = snapshot;
-  cachedAt = now;
-  return snapshot;
+export async function fetchCryptoSnapshot(limit = 100, convert = 'USD'): Promise<CryptoSnapshot> {
+  const normalizedLimit = clamp(Math.round(limit), 10, 200);
+  const normalizedConvert = convert.toUpperCase();
+
+  const now = Date.now();
+  if (
+    cachedSnapshot &&
+    now - cachedAt < CACHE_DURATION_MS &&
+    cachedSnapshot.convert === normalizedConvert &&
+    cachedSnapshot.assets.length === normalizedLimit
+  ) {
+    return cachedSnapshot;
+  }
+
+  try {
+    const [assets, globalMetrics] = await Promise.all([
+      fetchListings(normalizedLimit, normalizedConvert),
+      fetchGlobalMetrics(normalizedConvert),
+    ]);
+
+    if (assets.length === 0) {
+      throw new Error('CoinMarketCap gecerli veri donmedi');
+    }
+
+    const snapshot = buildSnapshot('coinmarketcap', normalizedConvert, assets, {
+      totalMarketCap: toNumber(globalMetrics.total_market_cap?.[normalizedConvert]),
+      totalVolume24h: toNumber(globalMetrics.total_volume_24h?.[normalizedConvert]),
+      marketCapChange24h: toNumber(globalMetrics.market_cap_change_percentage_24h_usd),
+      btcDominance: toNumber(globalMetrics.btc_dominance),
+      ethDominance: toNumber(globalMetrics.eth_dominance),
+      activeCryptocurrencies: toNumber(globalMetrics.active_cryptocurrencies),
+      activeMarketPairs: toNumber(globalMetrics.active_market_pairs),
+    });
+
+    cachedSnapshot = snapshot;
+    cachedAt = now;
+    return snapshot;
+  } catch (error) {
+    try {
+      const fallbackSnapshot = await fetchCoinGeckoSnapshot(normalizedLimit, normalizedConvert);
+      cachedSnapshot = fallbackSnapshot;
+      cachedAt = now;
+      return fallbackSnapshot;
+    } catch (fallbackError) {
+      const originalMessage = error instanceof Error ? error.message : 'CoinMarketCap hatasi';
+      const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : 'CoinGecko fallback hatasi';
+
+      if (cachedSnapshot && cachedSnapshot.convert === normalizedConvert) {
+        return cachedSnapshot;
+      }
+
+      throw new Error(`Kripto veri kaynaklarina ulasilamadi. CMC: ${originalMessage}. CoinGecko: ${fallbackMessage}`);
+    }
+  }
 }

@@ -63,7 +63,7 @@ interface CryptoAsset {
 }
 
 interface CryptoSnapshot {
-  source: 'coinmarketcap';
+  source: 'coinmarketcap' | 'coingecko-fallback';
   convert: string;
   timestamp: string;
   market: {
