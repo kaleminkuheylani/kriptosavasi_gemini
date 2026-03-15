@@ -237,64 +237,103 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-slate-100">
       <div className="overflow-x-auto">
-      <div className="mx-auto flex w-full min-w-[1260px] max-w-[1680px] flex-col gap-6 px-8 py-10">
-        <section className="flex flex-col gap-4 rounded-xl border border-slate-800 bg-slate-900/70 p-5 shadow-2xl">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <h1 className="text-2xl font-bold tracking-tight md:text-3xl">CoinMarketCap Kripto Analiz Merkezi</h1>
-              <p className="mt-1 text-sm text-slate-300">
-                Canli piyasa verisi, momentum/risk skorlari ve karsilastirma araclari tek panelde.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button asChild variant="outline" className="border-cyan-700 bg-cyan-950/40 hover:bg-cyan-900/40">
-                <Link href="/asistan">
-                  <MessageSquareText className="mr-2 h-4 w-4" />
-                  AI Asistan
-                </Link>
-              </Button>
-              <Button
-                variant="outline"
-                className="border-slate-700 bg-slate-900 hover:bg-slate-800"
-                onClick={() => void fetchCryptoData(true)}
-                disabled={loading || refreshing}
-              >
-                <RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
-                Yenile
-              </Button>
-            </div>
-          </div>
+      <div className="mx-auto w-full min-w-[1400px] max-w-[1880px] px-8 py-8">
+        <div className="grid grid-cols-[280px_minmax(0,1fr)] gap-6">
+          <aside className="sticky top-6 space-y-4 self-start">
+            <Card className="border-slate-800 bg-slate-900/70">
+              <CardHeader className="space-y-1">
+                <CardTitle className="text-lg">Kripto Control Desk</CardTitle>
+                <CardDescription>CoinMarketCap canli analiz paneli</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <Badge variant="outline" className="w-full justify-center border-emerald-500/30 text-emerald-300">
+                  Dashboard
+                </Badge>
+                <Button asChild variant="outline" className="w-full border-cyan-700 bg-cyan-950/40 hover:bg-cyan-900/40">
+                  <Link href="/asistan">
+                    <MessageSquareText className="mr-2 h-4 w-4" />
+                    AI Asistan
+                  </Link>
+                </Button>
+                <Button
+                  variant="outline"
+                  className="w-full border-slate-700 bg-slate-900 hover:bg-slate-800"
+                  onClick={() => void fetchCryptoData(true)}
+                  disabled={loading || refreshing}
+                >
+                  <RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+                  Yenile
+                </Button>
+              </CardContent>
+            </Card>
 
-          <div className="grid grid-cols-4 gap-3">
-            <Card className="border-slate-800 bg-slate-950/60">
+            <Card className="border-slate-800 bg-slate-900/70">
               <CardHeader className="pb-2">
-                <CardDescription>Toplam Piyasa Degeri</CardDescription>
-                <CardTitle className="text-xl">{snapshot ? formatMoney(snapshot.market.totalMarketCap) : '-'}</CardTitle>
+                <CardTitle className="text-sm">Piyasa Pulse</CardTitle>
               </CardHeader>
+              <CardContent className="space-y-2 text-xs text-slate-300">
+                <div className="flex items-center justify-between rounded border border-slate-800 bg-slate-950/60 px-2 py-1.5">
+                  <span>Kaynak</span>
+                  <span className="font-semibold text-cyan-300">{snapshot?.source ?? 'coinmarketcap'}</span>
+                </div>
+                <div className="flex items-center justify-between rounded border border-slate-800 bg-slate-950/60 px-2 py-1.5">
+                  <span>Aktif Coin</span>
+                  <span>{snapshot?.market.activeCryptocurrencies ?? '-'}</span>
+                </div>
+                <div className="flex items-center justify-between rounded border border-slate-800 bg-slate-950/60 px-2 py-1.5">
+                  <span>BTC Dom.</span>
+                  <span>{snapshot ? `${snapshot.market.btcDominance.toFixed(2)}%` : '-'}</span>
+                </div>
+                <div className="flex items-center justify-between rounded border border-slate-800 bg-slate-950/60 px-2 py-1.5">
+                  <span>ETH Dom.</span>
+                  <span>{snapshot ? `${snapshot.market.ethDominance.toFixed(2)}%` : '-'}</span>
+                </div>
+              </CardContent>
             </Card>
-            <Card className="border-slate-800 bg-slate-950/60">
-              <CardHeader className="pb-2">
-                <CardDescription>24s Hacim</CardDescription>
-                <CardTitle className="text-xl">{snapshot ? formatMoney(snapshot.market.totalVolume24h) : '-'}</CardTitle>
-              </CardHeader>
-            </Card>
-            <Card className="border-slate-800 bg-slate-950/60">
-              <CardHeader className="pb-2">
-                <CardDescription>Piyasa Degisimi (24s)</CardDescription>
-                <CardTitle className={snapshot && snapshot.market.marketCapChange24h >= 0 ? 'text-emerald-400 text-xl' : 'text-red-400 text-xl'}>
-                  {snapshot ? formatPercent(snapshot.market.marketCapChange24h) : '-'}
-                </CardTitle>
-              </CardHeader>
-            </Card>
-            <Card className="border-slate-800 bg-slate-950/60">
-              <CardHeader className="pb-2">
-                <CardDescription>Breadth (Yukselen/Dusen)</CardDescription>
-                <CardTitle className="text-xl">
-                  {snapshot ? `${snapshot.market.positive24hCount}/${snapshot.market.negative24hCount}` : '-'}
-                </CardTitle>
-              </CardHeader>
-            </Card>
+          </aside>
+
+          <section className="space-y-4">
+        <section className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-900/70 p-5 shadow-2xl">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">CoinMarketCap Kripto Analiz Merkezi</h1>
+            <p className="mt-1 text-sm text-slate-300">
+              Canli piyasa verisi, momentum/risk skorlari ve karsilastirma araclari tek panelde.
+            </p>
           </div>
+          <p className="text-xs text-slate-400">
+            Masaustu mod aktif - filtre paneli ve tablo ayni ekranda calisir
+          </p>
+        </section>
+
+        <section className="grid grid-cols-4 gap-3">
+          <Card className="border-slate-800 bg-slate-950/60">
+            <CardHeader className="pb-2">
+              <CardDescription>Toplam Piyasa Degeri</CardDescription>
+              <CardTitle className="text-xl">{snapshot ? formatMoney(snapshot.market.totalMarketCap) : '-'}</CardTitle>
+            </CardHeader>
+          </Card>
+          <Card className="border-slate-800 bg-slate-950/60">
+            <CardHeader className="pb-2">
+              <CardDescription>24s Hacim</CardDescription>
+              <CardTitle className="text-xl">{snapshot ? formatMoney(snapshot.market.totalVolume24h) : '-'}</CardTitle>
+            </CardHeader>
+          </Card>
+          <Card className="border-slate-800 bg-slate-950/60">
+            <CardHeader className="pb-2">
+              <CardDescription>Piyasa Degisimi (24s)</CardDescription>
+              <CardTitle className={snapshot && snapshot.market.marketCapChange24h >= 0 ? 'text-emerald-400 text-xl' : 'text-red-400 text-xl'}>
+                {snapshot ? formatPercent(snapshot.market.marketCapChange24h) : '-'}
+              </CardTitle>
+            </CardHeader>
+          </Card>
+          <Card className="border-slate-800 bg-slate-950/60">
+            <CardHeader className="pb-2">
+              <CardDescription>Breadth (Yukselen/Dusen)</CardDescription>
+              <CardTitle className="text-xl">
+                {snapshot ? `${snapshot.market.positive24hCount}/${snapshot.market.negative24hCount}` : '-'}
+              </CardTitle>
+            </CardHeader>
+          </Card>
         </section>
 
         <section className="grid grid-cols-6 gap-3 rounded-xl border border-slate-800 bg-slate-900/70 p-4">
@@ -622,6 +661,8 @@ export default function Home() {
         <p className="pt-2 text-center text-xs text-slate-500">
           Veri kaynagi: CoinMarketCap API - Bu platform bilgi amaclidir, yatirim tavsiyesi degildir.
         </p>
+          </section>
+        </div>
       </div>
       </div>
     </main>
