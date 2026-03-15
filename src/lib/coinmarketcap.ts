@@ -107,6 +107,13 @@ interface CmcGlobalMetrics {
 
 const API_BASE = 'https://pro-api.coinmarketcap.com';
 const CACHE_DURATION_MS = 60 * 1000;
+const API_KEY_ENV_NAMES = [
+  'COINMARKETCAP_API_KEY',
+  'CMC_API_KEY',
+  'CMC_PRO_API_KEY',
+  'NEXT_PUBLIC_COINMARKETCAP_API_KEY',
+  'NEXT_PUBLIC_CMC_API_KEY',
+] as const;
 
 let cachedSnapshot: CryptoSnapshot | null = null;
 let cachedAt = 0;
@@ -179,9 +186,13 @@ function buildAnalysis(coin: {
 }
 
 async function coinMarketCapFetch<T>(path: string, params: Record<string, string | number>): Promise<T> {
-  const apiKey = process.env.COINMARKETCAP_API_KEY ?? process.env.CMC_API_KEY;
+  const apiKey = API_KEY_ENV_NAMES
+    .map((name) => process.env[name])
+    .find((value) => typeof value === 'string' && value.trim().length > 0)
+    ?.trim();
+
   if (!apiKey) {
-    throw new Error('COINMARKETCAP_API_KEY eksik');
+    throw new Error(`CoinMarketCap API key eksik. Desteklenen env: ${API_KEY_ENV_NAMES.join(', ')}`);
   }
 
   const url = new URL(`${API_BASE}${path}`);
@@ -189,17 +200,37 @@ async function coinMarketCapFetch<T>(path: string, params: Record<string, string
     url.searchParams.set(key, String(value));
   }
 
-  const response = await fetch(url, {
-    headers: {
-      'X-CMC_PRO_API_KEY': apiKey,
-      Accept: 'application/json',
-    },
-    next: { revalidate: 60 },
-  });
+  let response: Response | null = null;
+  let lastBody = '';
+  let lastStatus = 0;
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`CoinMarketCap HTTP ${response.status}: ${body.slice(0, 200)}`);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    response = await fetch(url, {
+      headers: {
+        'X-CMC_PRO_API_KEY': apiKey,
+        Accept: 'application/json',
+      },
+      cache: 'no-store',
+    });
+
+    if (response.ok) break;
+
+    lastStatus = response.status;
+    lastBody = await response.text();
+    const shouldRetry = response.status === 429 || response.status >= 500;
+
+    if (!shouldRetry || attempt === 2) {
+      throw new Error(`CoinMarketCap HTTP ${response.status}: ${lastBody.slice(0, 220)}`);
+    }
+
+    const waitMs = (attempt + 1) * 400;
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+  }
+
+  if (!response) {
+    throw new Error(
+      `CoinMarketCap yanit vermedi${lastStatus ? ` (HTTP ${lastStatus})` : ''}${lastBody ? `: ${lastBody.slice(0, 180)}` : ''}`,
+    );
   }
 
   const payload = (await response.json()) as CmcResponse<T>;
@@ -281,10 +312,19 @@ export async function fetchCryptoSnapshot(limit = 100, convert = 'USD'): Promise
     return cachedSnapshot;
   }
 
-  const [assets, globalMetrics] = await Promise.all([
-    fetchListings(normalizedLimit, normalizedConvert),
-    fetchGlobalMetrics(normalizedConvert),
-  ]);
+  let assets: CryptoAsset[];
+  let globalMetrics: CmcGlobalMetrics;
+  try {
+    [assets, globalMetrics] = await Promise.all([
+      fetchListings(normalizedLimit, normalizedConvert),
+      fetchGlobalMetrics(normalizedConvert),
+    ]);
+  } catch (error) {
+    if (cachedSnapshot && cachedSnapshot.convert === normalizedConvert) {
+      return cachedSnapshot;
+    }
+    throw error;
+  }
 
   if (assets.length === 0) {
     throw new Error('CoinMarketCap gecerli veri donmedi');

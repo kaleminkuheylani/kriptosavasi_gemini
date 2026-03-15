@@ -87,6 +87,7 @@ interface CryptoApiResponse {
   success: boolean;
   data?: CryptoSnapshot;
   error?: string;
+  hint?: string;
   count?: number;
 }
 
@@ -167,7 +168,8 @@ export default function Home() {
         const payload = (await response.json()) as CryptoApiResponse;
 
         if (!response.ok || !payload.success || !payload.data) {
-          throw new Error(payload.error ?? 'Kripto verisi alinamadi');
+          const message = payload.error ?? 'Kripto verisi alinamadi';
+          throw new Error(payload.hint ? `${message} (${payload.hint})` : message);
         }
 
         setSnapshot(payload.data);
@@ -177,7 +179,6 @@ export default function Home() {
         setSelectedSymbol((prev) => (prev && symbols.includes(prev) ? prev : symbols[0] ?? null));
         setCompareSymbols((prev) => prev.filter((symbol) => symbols.includes(symbol)));
       } catch (fetchError) {
-        setSnapshot(null);
         setError(fetchError instanceof Error ? fetchError.message : 'Beklenmeyen bir hata olustu');
       } finally {
         setLoading(false);

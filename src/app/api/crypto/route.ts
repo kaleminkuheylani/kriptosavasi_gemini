@@ -83,11 +83,17 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Beklenmeyen bir hata olustu';
     console.error('CoinMarketCap /api/crypto hatasi:', error);
+    const missingKey =
+      message.toLowerCase().includes('api key eksik') ||
+      message.toLowerCase().includes('coinmarketcap_api_key eksik');
+
     return NextResponse.json(
       {
         success: false,
         error: message,
-        hint: 'COINMARKETCAP_API_KEY ortam degiskenini tanimlayip tekrar deneyin.',
+        hint: missingKey
+          ? 'CoinMarketCap key tanimla: COINMARKETCAP_API_KEY (alternatif: CMC_API_KEY / CMC_PRO_API_KEY).'
+          : 'CoinMarketCap servisi gecici olarak cevap vermiyor olabilir. Biraz sonra tekrar deneyin.',
       },
       { status: 503 },
     );
