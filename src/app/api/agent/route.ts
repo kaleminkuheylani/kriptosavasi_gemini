@@ -470,6 +470,14 @@ async function getWatchlist(userId: string | null) {
 async function addToWatchlist(symbol: string, name: string, userId: string | null) {
   if (!userId) return { success: false, error: 'Giriş yapmanız gerekli' };
   try {
+    const normalizedSymbol = String(symbol || '').trim().toUpperCase();
+    if (!/^[A-Z0-9.-]{1,15}$/.test(normalizedSymbol)) {
+      return { success: false, error: 'Geçerli bir hisse kodu gerekli' };
+    }
+    const normalizedName = typeof name === 'string' && name.trim().length > 0
+      ? name.trim().slice(0, 120)
+      : normalizedSymbol;
+
     const cs = await cookies();
     const token = cs.get('sb-access-token')?.value ?? null;
     const sb = serverClient(token);
@@ -478,17 +486,22 @@ async function addToWatchlist(symbol: string, name: string, userId: string | nul
       .from('watchlist_items')
       .select('id')
       .eq('user_id', userId)
-      .eq('symbol', symbol.toUpperCase())
+      .eq('symbol', normalizedSymbol)
       .maybeSingle();
 
     if (existing) return { success: false, error: 'Bu hisse zaten takip listesinde' };
 
     const { data, error } = await sb
       .from('watchlist_items')
-      .insert({ user_id: userId, symbol: symbol.toUpperCase(), name })
+      .insert({ user_id: userId, symbol: normalizedSymbol, name: normalizedName })
       .select()
       .single();
-    if (error) throw error;
+    if (error) {
+      if ((error as { code?: string }).code === '23505') {
+        return { success: false, error: 'Bu hisse zaten takip listesinde' };
+      }
+      throw error;
+    }
     return { success: true, data };
   } catch (error) {
     return { success: false, error: String(error) };
