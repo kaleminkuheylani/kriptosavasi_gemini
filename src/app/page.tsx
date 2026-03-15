@@ -280,6 +280,9 @@ export default function Home() {
   const [emailInput, setEmailInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
+  const [needsVerification, setNeedsVerification] = useState(false);
+  const [resendLoading, setResendLoading] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
 
   // Fetch current user
   const fetchCurrentUser = useCallback(async () => {
@@ -416,6 +419,15 @@ export default function Home() {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
+
+  // Countdown for verification code resend button
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const timer = setInterval(() => {
+      setResendCooldown(prev => (prev <= 1 ? 0 : prev - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [resendCooldown]);
 
   const isInWatchlist = (symbol: string) => watchlist.some(item => item.symbol === symbol);
 
@@ -823,15 +835,19 @@ export default function Home() {
       });
 
       const data = await response.json();
+      if (typeof data.retryAfterSeconds === 'number' && data.retryAfterSeconds > 0) {
+        setResendCooldown(prev => Math.max(prev, data.retryAfterSeconds));
+      }
 
       if (data.success) {
         if (data.requiresConfirmation) {
+          setNeedsVerification(true);
+          setAuthMode('login');
           toast({ title: 'E-posta doğrulaması gerekli', description: data.message });
-          setAuthOpen(false);
-          setEmailInput('');
           setPasswordInput('');
           return;
         }
+        setNeedsVerification(false);
         setCurrentUser(data.user);
         setAuthOpen(false);
         setEmailInput('');
@@ -848,6 +864,11 @@ export default function Home() {
           description: data.error,
           variant: 'destructive'
         });
+        if (data.requiresConfirmation) {
+          setNeedsVerification(true);
+          setAuthMode('login');
+          setPasswordInput('');
+        }
       }
     } catch {
       toast({
@@ -857,6 +878,55 @@ export default function Home() {
       });
     } finally {
       setAuthLoading(false);
+    }
+  };
+
+  const handleResendVerification = async () => {
+    const email = emailInput.trim();
+    if (!email) {
+      toast({
+        title: 'E-posta gerekli',
+        description: 'Kod göndermek için e-posta adresi girin',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setResendLoading(true);
+    try {
+      const response = await fetch('/api/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          action: 'resend_verification',
+        }),
+      });
+      const data = await response.json();
+      if (typeof data.retryAfterSeconds === 'number' && data.retryAfterSeconds > 0) {
+        setResendCooldown(prev => Math.max(prev, data.retryAfterSeconds));
+      } else {
+        setResendCooldown(prev => Math.max(prev, 45));
+      }
+
+      if (data.success) {
+        setNeedsVerification(true);
+        toast({ title: 'Kod gönderildi', description: data.message ?? 'Doğrulama kodu tekrar gönderildi' });
+      } else {
+        toast({
+          title: 'Hata',
+          description: data.error ?? 'Doğrulama kodu gönderilemedi',
+          variant: 'destructive',
+        });
+      }
+    } catch {
+      toast({
+        title: 'Hata',
+        description: 'Bağlantı hatası',
+        variant: 'destructive',
+      });
+    } finally {
+      setResendLoading(false);
     }
   };
 
@@ -2330,7 +2400,16 @@ export default function Home() {
       </Dialog>
 
       {/* Auth Modal */}
-      <Dialog open={authOpen} onOpenChange={setAuthOpen}>
+      <Dialog
+        open={authOpen}
+        onOpenChange={(open) => {
+          setAuthOpen(open);
+          if (!open) {
+            setNeedsVerification(false);
+            setResendCooldown(0);
+          }
+        }}
+      >
         <DialogContent className="max-w-md bg-slate-900 border-slate-800 text-white">
           <DialogHeader>
             <div className="flex items-center gap-3 mb-4">
@@ -2382,9 +2461,38 @@ export default function Home() {
               {authMode === 'login' ? 'Giris Yap' : 'Kayit Ol'}
             </Button>
 
+            {(needsVerification || authMode === 'login') && (
+              <div className="space-y-2">
+                {needsVerification && (
+                  <p className="text-xs text-amber-300">
+                    E-posta doğrulaması bekleniyor. Kod gelmediyse yeniden gönderebilirsiniz.
+                  </p>
+                )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleResendVerification}
+                  disabled={!emailInput.trim() || resendLoading || authLoading || resendCooldown > 0}
+                  className="w-full border-slate-700 bg-slate-800/70 hover:bg-slate-700 text-slate-200"
+                >
+                  {resendLoading ? (
+                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                  ) : (
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                  )}
+                  {resendCooldown > 0
+                    ? `Yeniden gonder (${resendCooldown}s)`
+                    : 'Dogrulama kodunu yeniden gonder'}
+                </Button>
+              </div>
+            )}
+
             <div className="text-center">
               <button
-                onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}
+                onClick={() => {
+                  setAuthMode(authMode === 'login' ? 'register' : 'login');
+                  setNeedsVerification(false);
+                }}
                 className="text-sm text-slate-400 hover:text-white transition-colors"
               >
                 {authMode === 'login' ? 'Hesabiniz yok mu? Kayit olun' : 'Zaten hesabiniz var mi? Giris yapin'}
