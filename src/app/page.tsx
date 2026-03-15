@@ -1,12 +1,14 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import {
   Activity,
   AlertTriangle,
   ArrowDownRight,
   ArrowUpRight,
   Gauge,
+  MessageSquareText,
   RefreshCw,
   Search,
   ShieldAlert,
@@ -242,15 +244,23 @@ export default function Home() {
                 Canli piyasa verisi, momentum/risk skorlari ve karsilastirma araclari tek panelde.
               </p>
             </div>
-            <Button
-              variant="outline"
-              className="border-slate-700 bg-slate-900 hover:bg-slate-800"
-              onClick={() => void fetchCryptoData(true)}
-              disabled={loading || refreshing}
-            >
-              <RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
-              Yenile
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button asChild variant="outline" className="border-cyan-700 bg-cyan-950/40 hover:bg-cyan-900/40">
+                <Link href="/asistan">
+                  <MessageSquareText className="mr-2 h-4 w-4" />
+                  AI Asistan
+                </Link>
+              </Button>
+              <Button
+                variant="outline"
+                className="border-slate-700 bg-slate-900 hover:bg-slate-800"
+                onClick={() => void fetchCryptoData(true)}
+                disabled={loading || refreshing}
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+                Yenile
+              </Button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
@@ -608,7 +618,7 @@ export default function Home() {
         ) : null}
 
         <p className="pt-2 text-center text-xs text-slate-500">
-          Veri kaynagi: CoinMarketCap API • Bu platform bilgi amaclidir, yatirim tavsiyesi degildir.
+          Veri kaynagi: CoinMarketCap API - Bu platform bilgi amaclidir, yatirim tavsiyesi degildir.
         </p>
       </div>
     </main>
