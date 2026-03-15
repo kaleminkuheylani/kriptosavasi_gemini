@@ -2173,8 +2173,8 @@ export default function Home() {
 
       {/* Egitimsel Asistan Modal */}
       <Dialog open={agentOpen} onOpenChange={setAgentOpen}>
-        <DialogContent className="max-w-3xl max-h-[85vh] bg-slate-900 border-slate-800 text-white flex flex-col">
-          <DialogHeader>
+        <DialogContent className="w-screen h-screen max-w-none max-h-none rounded-none border-0 p-0 gap-0 bg-slate-900 text-white flex flex-col">
+          <DialogHeader className="px-4 sm:px-6 pt-4 pb-3 border-b border-slate-800/80">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-cyan-500 flex items-center justify-center">
@@ -2432,7 +2432,7 @@ export default function Home() {
           </div>
 
           {/* Chat Input */}
-          <div className="flex gap-2 pt-4 border-t border-slate-800">
+          <div className="flex gap-2 px-4 sm:px-6 py-4 border-t border-slate-800 bg-slate-900">
             <Input
               placeholder={currentUser ? 'Mesajinizi yazin...' : 'Chatbotu kullanmak icin giris yapin'}
               value={chatInput}
