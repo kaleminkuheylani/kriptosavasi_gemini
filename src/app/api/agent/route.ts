@@ -1780,15 +1780,62 @@ function sanitizeHistory(
   return merged;
 }
 
+type ToolParamsMap = Record<string, Record<string, unknown>>;
+interface ToolExecutionTask {
+  tool: string;
+  label: string;
+  params: Record<string, unknown>;
+}
+
+const TOOL_NAME_KEYS = Object.keys(TOOLS).sort((a, b) => b.length - a.length);
+
+function resolveToolBaseName(toolLabel: string): string {
+  const match = TOOL_NAME_KEYS.find(
+    (name) => toolLabel === name || toolLabel.startsWith(`${name}_`)
+  );
+  return match ?? toolLabel;
+}
+
+function buildExecutionTasks(tools: string[], params: ToolParamsMap): ToolExecutionTask[] {
+  const tasks: ToolExecutionTask[] = [];
+
+  for (const tool of tools) {
+    const matchedParams = Object.entries(params)
+      .filter(([key]) => key === tool || key.startsWith(`${tool}_`));
+
+    if (matchedParams.length === 0) {
+      tasks.push({ tool, label: tool, params: {} });
+      continue;
+    }
+
+    for (const [key, value] of matchedParams) {
+      const safeParams =
+        value && typeof value === 'object' && !Array.isArray(value)
+          ? (value as Record<string, unknown>)
+          : {};
+      tasks.push({ tool, label: key, params: safeParams });
+    }
+  }
+
+  // Stable de-dup by label
+  const seen = new Set<string>();
+  return tasks.filter((task) => {
+    if (seen.has(task.label)) return false;
+    seen.add(task.label);
+    return true;
+  });
+}
+
 // Builds a compact text representation of tool results for the final LLM
 // For web_search, uses the pre-generated summary instead of raw items to save tokens
 function buildToolResultsText(toolResults: Record<string, unknown>): string {
   const parts: string[] = [];
 
-  for (const [tool, result] of Object.entries(toolResults)) {
+  for (const [toolLabel, result] of Object.entries(toolResults)) {
+    const tool = resolveToolBaseName(toolLabel);
     const r = result as { success: boolean; data?: unknown; error?: string; _meta?: unknown };
     if (!r.success) {
-      parts.push(`### ${tool}\nHata: ${r.error}`);
+      parts.push(`### ${toolLabel}\nHata: ${r.error}`);
       continue;
     }
 
@@ -1797,7 +1844,7 @@ function buildToolResultsText(toolResults: Record<string, unknown>): string {
       if (d) {
         const queriesText = d.queries ? `Kullanılan Sorgular: ${d.queries.join(' | ')}` : '';
         const summaryText = d.summary || '';
-        parts.push(`### web_search\n${queriesText}\n\n${summaryText}`);
+        parts.push(`### ${toolLabel}\n${queriesText}\n\n${summaryText}`);
       }
     } else if (tool === 'get_stock_price') {
       const enhanced = result as {
@@ -1807,7 +1854,7 @@ function buildToolResultsText(toolResults: Record<string, unknown>): string {
         historical?: Record<string, unknown> | null;
         userStatus?: Record<string, unknown> | null;
       };
-      const lines: string[] = [`### get_stock_price (kaynak: ${enhanced.priceSource || 'api'})`];
+      const lines: string[] = [`### ${toolLabel} (kaynak: ${enhanced.priceSource || 'api'})`];
       if (enhanced.data) {
         lines.push('**Fiyat Verisi:**\n' + JSON.stringify(enhanced.data, null, 2).slice(0, 400));
       }
@@ -1831,7 +1878,7 @@ function buildToolResultsText(toolResults: Record<string, unknown>): string {
       }
       parts.push(lines.join('\n'));
     } else {
-      parts.push(`### ${tool}\n${JSON.stringify(r.data, null, 2).slice(0, 800)}`);
+      parts.push(`### ${toolLabel}\n${JSON.stringify(r.data, null, 2).slice(0, 800)}`);
     }
   }
 
@@ -2005,34 +2052,32 @@ export async function POST(request: NextRequest) {
       ? rawTools.filter((t: string) => enabledTools.includes(t))
       : rawTools;
 
-    // Separate immediate tools from those requiring user confirmation
-    const immediateTools = tools.filter((t: string) => !CONFIRMATION_REQUIRED_TOOLS.includes(t));
-    const pendingActions: PendingAction[] = tools
-      .filter(t => CONFIRMATION_REQUIRED_TOOLS.includes(t))
-      .map(t => ({
-        tool: t,
-        params: params[t] || params[Object.keys(params).find(k => k.startsWith(t)) ?? ''] || {},
-        description: describePendingAction(
-          t,
-          params[t] || params[Object.keys(params).find(k => k.startsWith(t)) ?? ''] || {}
-        ),
+    // Build per-tool execution tasks (supports multi-symbol keys like get_stock_price_THYAO)
+    const executionTasks = buildExecutionTasks(tools, params as ToolParamsMap);
+    const immediateTasks = executionTasks.filter(task => !CONFIRMATION_REQUIRED_TOOLS.includes(task.tool));
+    const pendingActions: PendingAction[] = executionTasks
+      .filter(task => CONFIRMATION_REQUIRED_TOOLS.includes(task.tool))
+      .map(task => ({
+        tool: task.tool,
+        params: task.params,
+        description: describePendingAction(task.tool, task.params),
       }));
 
-    console.log('🔧 Immediate tools:', immediateTools);
+    console.log('🔧 Immediate tools:', immediateTasks.map(t => t.label));
     console.log('⏳ Pending (needs confirmation):', pendingActions.map(a => a.tool));
 
     // Execute only immediate tools in parallel
     const toolResults: Record<string, unknown> = {};
-    const executionPromises = immediateTools.map(async (tool) => {
-      const toolParams = params[tool] || params[Object.keys(params).find(k => k.startsWith(tool)) ?? ''] || {};
-      const result = await executeTool(tool, toolParams, userId);
-      return { tool, result };
+    const executionPromises = immediateTasks.map(async (task) => {
+      const result = await executeTool(task.tool, task.params, userId);
+      return { label: task.label, result };
     });
 
     const results = await Promise.all(executionPromises);
-    for (const { tool, result } of results) {
-      toolResults[tool] = result;
+    for (const { label, result } of results) {
+      toolResults[label] = result;
     }
+    const immediateTools = [...new Set(immediateTasks.map(task => task.tool))];
 
     // ── Build query-type-specific user prompt ────────────────────────────
     const pendingNote = pendingActions.length > 0
@@ -2090,6 +2135,8 @@ THREAD FORMAT: Yanıtını "|||" ile ayırdığın 2-3 kısa mesaj olarak ver. H
 Yalnızca objektif, veri-temelli analiz yap. Yatırım tavsiyesi, öneri veya yönlendirme verme.
 Yonlendirici eylem cagrisi iceren ifadeler kullanma. "Sinyal" yerine "gösterge durumu" ifadesini tercih et.
 Emoji kullan ama abartma. Her mesaj maksimum 5 madde içersin.
+Araç sonuçlarında rakam varsa mutlaka kullan; yanıtta en az 3 somut veri noktası (fiyat, yüzde değişim, hacim, seviye vb.) ver.
+Araçlardan hata gelirse bunu açıkça belirt ve hangi verinin eksik olduğunu söyle.
 
 Matematiksel göstergeler varsa şu şekilde yorumla:
 - RSI < 30 = asiri dusuk bolge | RSI > 70 = asiri yuksek bolge
