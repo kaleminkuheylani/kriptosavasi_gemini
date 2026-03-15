@@ -370,7 +370,8 @@ export default function AssistantPage() {
 
   return (
     <main className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-slate-100">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-4 py-8 md:px-8">
+      <div className="overflow-x-auto">
+      <div className="mx-auto flex w-full min-w-[1260px] max-w-[1680px] flex-col gap-4 px-8 py-10">
         <section className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-900/70 p-4">
           <div className="space-y-1">
             <h1 className="inline-flex items-center gap-2 text-2xl font-bold">
@@ -398,8 +399,8 @@ export default function AssistantPage() {
           </div>
         </section>
 
-        <section className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-          <Card className="border-slate-800 bg-slate-900/70 lg:col-span-8">
+        <section className="grid grid-cols-12 gap-4">
+          <Card className="col-span-8 border-slate-800 bg-slate-900/70">
             <CardHeader>
               <CardTitle>Asistan Sohbeti</CardTitle>
               <CardDescription>Mesaj gonder, onerilen sorulara tikla, gerekirse onay isteyen islemleri yonet.</CardDescription>
@@ -576,7 +577,7 @@ export default function AssistantPage() {
             </CardContent>
           </Card>
 
-          <Card className="border-slate-800 bg-slate-900/70 lg:col-span-4">
+          <Card className="col-span-4 border-slate-800 bg-slate-900/70">
             <CardHeader>
               <CardTitle>Arac Kategorileri</CardTitle>
               <CardDescription>Aktif kategoriler `/api/agent` icin enabledTools listesine gonderilir.</CardDescription>
@@ -614,6 +615,7 @@ export default function AssistantPage() {
             </CardContent>
           </Card>
         </section>
+      </div>
       </div>
     </main>
   );

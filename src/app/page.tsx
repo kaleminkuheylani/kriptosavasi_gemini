@@ -236,7 +236,8 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-slate-100">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-8 md:px-8">
+      <div className="overflow-x-auto">
+      <div className="mx-auto flex w-full min-w-[1260px] max-w-[1680px] flex-col gap-6 px-8 py-10">
         <section className="flex flex-col gap-4 rounded-xl border border-slate-800 bg-slate-900/70 p-5 shadow-2xl">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
@@ -264,7 +265,7 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-4 gap-3">
             <Card className="border-slate-800 bg-slate-950/60">
               <CardHeader className="pb-2">
                 <CardDescription>Toplam Piyasa Degeri</CardDescription>
@@ -296,8 +297,8 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="grid grid-cols-1 gap-3 rounded-xl border border-slate-800 bg-slate-900/70 p-4 md:grid-cols-2 xl:grid-cols-6">
-          <div className="relative xl:col-span-2">
+        <section className="grid grid-cols-6 gap-3 rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+          <div className="relative col-span-2">
             <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
             <Input
               value={query}
@@ -350,7 +351,7 @@ export default function Home() {
               <option value="rank">CMK Sirasi</option>
             </select>
           </div>
-          <div className="flex justify-end xl:col-span-6">
+          <div className="flex justify-end col-span-6">
             <Button
               variant="ghost"
               className="text-slate-300 hover:bg-slate-800 hover:text-white"
@@ -379,8 +380,8 @@ export default function Home() {
           </Card>
         ) : snapshot ? (
           <>
-            <section className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-              <Card className="border-slate-800 bg-slate-900/70 xl:col-span-2">
+            <section className="grid grid-cols-3 gap-4">
+              <Card className="col-span-2 border-slate-800 bg-slate-900/70">
                 <CardHeader className="pb-2">
                   <CardTitle>Piyasa Taramasi</CardTitle>
                   <CardDescription>Satira tiklayarak detay analizini sag panelde goruntule.</CardDescription>
@@ -494,8 +495,8 @@ export default function Home() {
               </Card>
             </section>
 
-            <section className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-              <Card className="border-slate-800 bg-slate-900/70 xl:col-span-2">
+            <section className="grid grid-cols-3 gap-4">
+              <Card className="col-span-2 border-slate-800 bg-slate-900/70">
                 <CardHeader>
                   <CardTitle>Karsilastirma Araci</CardTitle>
                   <CardDescription>En fazla 5 coin secip performans ve skorlarini kiyasla.</CardDescription>
@@ -578,7 +579,7 @@ export default function Home() {
               </Card>
             </section>
 
-            <section className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <section className="grid grid-cols-2 gap-4">
               <Card className="border-slate-800 bg-slate-900/70">
                 <CardHeader>
                   <CardTitle>Top Momentum Coinleri</CardTitle>
@@ -621,6 +622,7 @@ export default function Home() {
         <p className="pt-2 text-center text-xs text-slate-500">
           Veri kaynagi: CoinMarketCap API - Bu platform bilgi amaclidir, yatirim tavsiyesi degildir.
         </p>
+      </div>
       </div>
     </main>
   );
