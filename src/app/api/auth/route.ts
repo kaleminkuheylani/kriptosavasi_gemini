@@ -43,6 +43,14 @@ function mapSupabaseErrorMessage(message: string): string {
   return message;
 }
 
+async function resendSignupVerificationCode(email: string): Promise<void> {
+  const { error } = await supabase.auth.resend({
+    type: 'signup',
+    email,
+  });
+  if (error) throw error;
+}
+
 const COOKIE_ACCESS  = 'sb-access-token';
 const COOKIE_REFRESH = 'sb-refresh-token';
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 7; // 7 days
@@ -147,10 +155,10 @@ export async function POST(request: NextRequest) {
     const { email, password, action } = (body ?? {}) as {
       email?: string;
       password?: string;
-      action?: 'login' | 'register';
+      action?: 'login' | 'register' | 'resend_verification';
     };
 
-    if (action !== 'login' && action !== 'register') {
+    if (action !== 'login' && action !== 'register' && action !== 'resend_verification') {
       return NextResponse.json({ success: false, error: 'Geçersiz işlem türü' }, { status: 400 });
     }
 
@@ -158,6 +166,24 @@ export async function POST(request: NextRequest) {
     const normalizedEmailInput = String(email ?? '').trim();
     const emailErr = validateEmail(normalizedEmailInput);
     if (emailErr) return NextResponse.json({ success: false, error: emailErr }, { status: 400 });
+
+    const normalizedEmail = normalizedEmailInput.toLowerCase();
+
+    if (action === 'resend_verification') {
+      try {
+        await resendSignupVerificationCode(normalizedEmail);
+        return NextResponse.json({
+          success: true,
+          requiresConfirmation: true,
+          message: 'Doğrulama kodu e-posta adresinize gönderildi.',
+        });
+      } catch (resendError) {
+        const msg = resendError instanceof Error
+          ? mapSupabaseErrorMessage(resendError.message)
+          : 'Doğrulama kodu gönderilemedi';
+        return NextResponse.json({ success: false, error: msg }, { status: 400 });
+      }
+    }
 
     if (typeof password !== 'string' || password.length === 0) {
       return NextResponse.json({ success: false, error: 'Şifre gerekli' }, { status: 400 });
@@ -170,8 +196,6 @@ export async function POST(request: NextRequest) {
       const passErr = validatePassword(password);
       if (passErr) return NextResponse.json({ success: false, error: passErr }, { status: 400 });
     }
-
-    const normalizedEmail = normalizedEmailInput.toLowerCase();
 
     if (action === 'register') {
       const rumuz = buildRumuzFromEmail(normalizedEmail);
@@ -211,7 +235,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({
           success: true,
           requiresConfirmation: true,
-          message: 'Kayıt başarılı! E-posta adresinize doğrulama linki gönderildi.',
+          message: 'Kayıt başarılı! E-posta adresinize doğrulama kodu gönderildi.',
         });
       }
 
@@ -240,6 +264,22 @@ export async function POST(request: NextRequest) {
     });
 
     if (error) {
+      if (error.message.toLowerCase().includes('email not confirmed')) {
+        try {
+          await resendSignupVerificationCode(normalizedEmail);
+        } catch (resendErr) {
+          console.error('Auth resend verification error:', resendErr);
+        }
+        return NextResponse.json(
+          {
+            success: false,
+            requiresConfirmation: true,
+            error: 'E-posta adresiniz henüz doğrulanmamış. Doğrulama kodu e-posta adresinize tekrar gönderildi.',
+          },
+          { status: 403 }
+        );
+      }
+
       const msg = error.message.includes('Invalid login')
         ? 'E-posta veya şifre hatalı.'
         : mapSupabaseErrorMessage(error.message);
