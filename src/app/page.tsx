@@ -82,6 +82,20 @@ interface Stock {
   sector?: string;
 }
 
+interface GlobalMarketItem {
+  symbol: string;
+  name: string;
+  market: 'digital' | 'forex' | 'nasdaq';
+  price: number;
+  change: number;
+  changePercent: number;
+  high: number;
+  low: number;
+  open: number;
+  previousClose: number;
+  volume: number;
+}
+
 interface WatchlistItem {
   id: string;
   symbol: string;
@@ -244,6 +258,12 @@ export default function Home() {
   const [popularStocks, setPopularStocks] = useState<Array<{ symbol: string; name: string; count: number; price: number; changePercent: number }>>([]);
   const [sectors, setSectors] = useState<Array<{ name: string; count: number; avgChange: number; topStocks: Stock[] }>>([]);
   const [similarStocks, setSimilarStocks] = useState<Stock[]>([]);
+  const [globalMarketData, setGlobalMarketData] = useState<{
+    digitalCurrencies: GlobalMarketItem[];
+    forex: GlobalMarketItem[];
+    nasdaq: GlobalMarketItem[];
+    source: string;
+  } | null>(null);
   
   // Detail Modal
   const [detailOpen, setDetailOpen] = useState(false);
@@ -369,6 +389,24 @@ export default function Home() {
     } catch {}
   }, []);
 
+  // Fetch global market data (Digital Currency, Forex, NASDAQ) from Twelve Data
+  const fetchGlobalMarketData = useCallback(async () => {
+    try {
+      const response = await fetch('/api/market?type=global');
+      const data = await response.json();
+      if (data.success && data.data) {
+        setGlobalMarketData({
+          digitalCurrencies: data.data.digitalCurrencies ?? [],
+          forex: data.data.forex ?? [],
+          nasdaq: data.data.nasdaq ?? [],
+          source: data.source ?? data.data.source ?? 'fallback',
+        });
+      }
+    } catch {
+      setGlobalMarketData(null);
+    }
+  }, []);
+
   // Fetch related stocks based on watchlist sectors (educational listing)
   const fetchSimilarStocks = useCallback(async () => {
     try {
@@ -396,7 +434,8 @@ export default function Home() {
     fetchMarketSummary();
     fetchPopularStocks();
     fetchSectors();
-  }, [fetchStocks, fetchWatchlist, fetchAlerts, fetchCurrentUser, fetchMarketSummary, fetchPopularStocks, fetchSectors]);
+    fetchGlobalMarketData();
+  }, [fetchStocks, fetchWatchlist, fetchAlerts, fetchCurrentUser, fetchMarketSummary, fetchPopularStocks, fetchSectors, fetchGlobalMarketData]);
 
   // Fetch similar when watchlist changes
   useEffect(() => {
@@ -1097,6 +1136,12 @@ export default function Home() {
 
   const getCurrentPrice = (symbol: string): Stock | undefined => stocks.find(s => s.code === symbol);
 
+  const formatGlobalPrice = (item: GlobalMarketItem) => {
+    if (item.market === 'forex') return formatNumber(item.price, 4);
+    if (item.market === 'digital') return formatNumber(item.price >= 1000 ? 2 : 4);
+    return formatNumber(item.price, 2);
+  };
+
   // Stock Card Component
   const StockCard = ({ stock, showWatchlistButton = true }: { stock: Stock; showWatchlistButton?: boolean }) => {
     const inWatchlist = isInWatchlist(stock.code);
@@ -1437,6 +1482,57 @@ export default function Home() {
                     )}
                   </SectionCard>
                 </div>
+
+                <SectionCard
+                  title="Kuresel Piyasalar (Twelve Data)"
+                  icon={Globe}
+                  color="text-cyan-400"
+                >
+                  {globalMarketData ? (
+                    <div className="p-4 space-y-4">
+                      <div className="grid md:grid-cols-3 gap-4">
+                        {[
+                          { key: 'digitalCurrencies', title: 'Digital Currency', items: globalMarketData.digitalCurrencies },
+                          { key: 'forex', title: 'Forex', items: globalMarketData.forex },
+                          { key: 'nasdaq', title: 'NASDAQ', items: globalMarketData.nasdaq },
+                        ].map(section => (
+                          <div key={section.key} className="rounded-lg border border-slate-800 bg-slate-800/30">
+                            <div className="px-3 py-2 border-b border-slate-800">
+                              <p className="text-sm font-semibold text-white">{section.title}</p>
+                            </div>
+                            <div className="p-2 space-y-1">
+                              {section.items.slice(0, 4).map(item => (
+                                <div key={item.symbol} className="flex items-center justify-between rounded-md px-2 py-2 hover:bg-slate-800/60">
+                                  <div>
+                                    <p className="text-sm font-medium text-white">{item.symbol}</p>
+                                    <p className="text-[11px] text-slate-500 truncate max-w-[140px]">{item.name}</p>
+                                  </div>
+                                  <div className="text-right">
+                                    <p className="text-sm text-white">
+                                      {formatGlobalPrice(item)}
+                                      {item.market === 'forex' ? '' : ' USD'}
+                                    </p>
+                                    <p className={`text-xs ${item.changePercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                                      {item.changePercent >= 0 ? '+' : ''}{formatNumber(item.changePercent, 2)}%
+                                    </p>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        Kaynak: {globalMarketData.source === 'twelvedata' ? 'Twelve Data' : 'Fallback'}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="p-6 text-center text-slate-500">
+                      <Globe className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                      <p>Kuresel piyasa verileri su an alinamiyor</p>
+                    </div>
+                  )}
+                </SectionCard>
 
                 {/* Categories */}
                 <SectionCard 

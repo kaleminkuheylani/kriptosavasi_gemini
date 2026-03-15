@@ -28,6 +28,7 @@ Bu proje yatirim tavsiyesi vermez; tum icerikler finansal okuryazarlik amaciyla 
 
 ### Veri Kaynaklari
 - Asenax API (canli hisse verileri)
+- Twelve Data API (BIST + Digital Currency + Forex + NASDAQ)
 - Finance API (gecmis veriler)
 - Groq API (LLM)
 - z-ai-web-dev-sdk (VLM, web arama)
@@ -63,6 +64,7 @@ Uygulama http://localhost:3000 adresinde calisacaktir.
 |----------|--------|----------|
 | /api/stocks | GET | Tum hisseleri listele |
 | /api/stocks/[symbol] | GET | Hisse detayi ve grafik |
+| /api/market | GET | BIST ozeti + global market (type=global/digital/forex/nasdaq) |
 | /api/auth | GET/POST/DELETE | Kullanici islemleri |
 | /api/watchlist | CRUD | Takip listesi |
 | /api/alerts | CRUD | Fiyat bildirimleri |
@@ -112,6 +114,7 @@ prisma/
 ```
 DATABASE_URL="file:./db/custom.db"
 GROQ_API_KEY="your-groq-api-key"
+TWELVE_DATA_API_KEY="your-twelve-data-api-key"
 ```
 
 ## Lisans
